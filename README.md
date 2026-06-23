@@ -30,20 +30,37 @@ Every destructive command supports **`--dry-run`** (preview) and **`--yes`**
 
 ## Installation
 
-### From source (uv — recommended)
+> **Prerequisite:** [uv](https://docs.astral.sh/uv/) — it installs Python 3.14
+> for you, so it's the only thing you need first:
+>
+> ```bash
+> curl -LsSf https://astral.sh/uv/install.sh | sh
+> ```
+>
+> Then restart your shell (or `source ~/.zshrc`) so `uv` and `~/.local/bin`
+> are on your `PATH`.
+
+### Quick install — global `jt` (recommended)
+
+No clone required. Installs the `jt` command straight onto your `PATH`:
+
+```bash
+uv tool install --from git+https://github.com/silverbeer/janitor.git janitor-cli
+jt --help
+jt doctor
+```
+
+Update later with `uv tool upgrade janitor-cli`; remove with
+`uv tool uninstall janitor-cli`.
+
+### From a clone (for development)
 
 ```bash
 git clone https://github.com/silverbeer/janitor.git
 cd janitor
-uv venv --python 3.14
-uv pip install -e ".[dev]"
+uv sync --extra dev          # creates .venv, installs jt + dev tools
+source .venv/bin/activate    # puts `jt` on your PATH for this shell
 jt --help
-```
-
-### As a tool
-
-```bash
-uv tool install --from . janitor-cli   # exposes `jt` on your PATH
 ```
 
 ### Homebrew (planned)
@@ -150,11 +167,11 @@ See [`docs/architecture.md`](./docs/architecture.md) for the full write-up and
 ## Development
 
 ```bash
-uv pip install -e ".[dev]"
-ruff check .          # lint
-ruff format .         # format
-mypy                  # type check
-pytest                # tests + coverage
+uv sync --extra dev       # set up .venv with dev tools
+uv run ruff check .       # lint
+uv run ruff format .      # format
+uv run mypy               # type check
+uv run pytest             # tests + coverage
 ```
 
 See [`docs/contributing.md`](./docs/contributing.md).

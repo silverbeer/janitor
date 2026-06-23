@@ -8,10 +8,12 @@ gates, and conventions.
 ```bash
 git clone https://github.com/silverbeer/janitor.git
 cd janitor
-uv venv --python 3.14
+uv sync --extra dev          # creates .venv, installs jt + dev tools
 source .venv/bin/activate
-uv pip install -e ".[dev]"
 ```
+
+> CI runs the gates with `uv run <tool>` (no activation needed). Locally you can
+> do the same, or activate the venv once and call the tools directly.
 
 ## Quality gates
 
