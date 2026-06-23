@@ -1,0 +1,28 @@
+# Janitor configuration — copy to ~/.config/janitor/config.toml
+#
+# Every value is optional; omitted keys fall back to built-in defaults.
+# Environment variables override file values, e.g. JANITOR_DISK__TOP_N=50.
+
+# Global behavior
+dry_run = false       # Preview mutating actions without executing them
+assume_yes = false    # Auto-confirm prompts (use with care)
+log_level = "INFO"    # DEBUG | INFO | WARNING | ERROR | CRITICAL
+log_json = false      # Emit structured JSON logs instead of console output
+
+[docker]
+prune_volumes = false      # Include volumes in `jt docker prune`
+prune_build_cache = true   # Remove build cache during prune
+
+[disk]
+scan_paths = ["~/"]        # Roots scanned for large files/dirs
+top_n = 20                 # Default number of entries to report
+min_size_mb = 100          # Ignore files/dirs smaller than this
+
+[logs]
+paths = ["/var/log", "~/Library/Logs"]
+max_age_days = 30          # Logs older than this are eligible for cleanup
+min_size_mb = 10           # Report logs above this size
+
+[supabase]
+search_paths = ["~/gitrepos", "~/projects"]
+backup_dir = "~/.janitor/backups/supabase"
