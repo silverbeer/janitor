@@ -51,3 +51,28 @@ def test_env_overrides_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 def test_load_missing_file_returns_defaults(tmp_path: Path) -> None:
     config = load_config(tmp_path / "nope.toml")
     assert config.disk.top_n == 20
+
+
+def test_supabase_retention_defaults() -> None:
+    sb = JanitorConfig().supabase
+    assert sb.resolved_retention("anything") == (5, 0, 2000)
+    assert sb.resolved_backup_dir("anything") == sb.backup_dir.expanduser()
+
+
+def test_supabase_per_project_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        "[supabase]\n"
+        "retention_count = 5\n"
+        "[supabase.projects.mt]\n"
+        'backup_dir = "/tmp/mt-backups"\n'
+        "retention_count = 3\n"
+        "max_dir_size_mb = 500\n",
+        encoding="utf-8",
+    )
+    sb = load_config(cfg).supabase
+    # Per-project override wins; unset retention_days falls back to the default.
+    assert sb.resolved_retention("mt") == (3, 0, 500)
+    assert sb.resolved_backup_dir("mt") == Path("/tmp/mt-backups")
+    # A project with no override block uses the shared defaults.
+    assert sb.resolved_retention("other") == (5, 0, 2000)

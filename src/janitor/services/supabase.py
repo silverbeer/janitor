@@ -1,4 +1,4 @@
-"""Supabase project discovery and backup service."""
+"""Supabase project discovery, backup, and backup-dir hygiene service."""
 
 from __future__ import annotations
 
@@ -6,12 +6,14 @@ from datetime import datetime
 from pathlib import Path
 
 from janitor.logging import get_logger
-from janitor.models.system import SupabaseProject
+from janitor.models.system import BackupDirReport, BackupFile, SupabaseProject
 from janitor.services.shell import ShellRunner, which
 
 __all__ = ["SupabaseService"]
 
 logger = get_logger(__name__)
+
+_SECONDS_PER_DAY = 86_400
 
 
 class SupabaseService:
@@ -86,3 +88,105 @@ class SupabaseService:
         )
         logger.info("supabase.backup", project=project.name, path=str(destination))
         return destination
+
+    # ---- backup-dir hygiene -------------------------------------------------
+
+    @staticmethod
+    def _backup_glob(project_name: str) -> str:
+        """Glob matching this project's dumps (``<name>-<timestamp>.sql``)."""
+        return f"{project_name}-*.sql"
+
+    def list_backups(self, project_name: str, backup_dir: Path) -> list[BackupFile]:
+        """Return this project's dumps in ``backup_dir``, newest first."""
+        directory = backup_dir.expanduser()
+        if not directory.is_dir():
+            return []
+        now = datetime.now().timestamp()
+        files: list[BackupFile] = []
+        for path in directory.glob(self._backup_glob(project_name)):
+            if not path.is_file():
+                continue
+            stat = path.stat()
+            files.append(
+                BackupFile(
+                    path=path,
+                    size=stat.st_size,
+                    mtime=stat.st_mtime,
+                    age_days=int((now - stat.st_mtime) // _SECONDS_PER_DAY),
+                )
+            )
+        files.sort(key=lambda f: f.mtime, reverse=True)
+        return files
+
+    @staticmethod
+    def _select_prunable(
+        files: list[BackupFile],
+        *,
+        retention_count: int,
+        retention_days: int,
+    ) -> list[BackupFile]:
+        """Return the files (assumed newest-first) that violate retention.
+
+        A file is prunable if it falls beyond ``retention_count`` OR is older
+        than ``retention_days``. Either limit at 0 disables that rule.
+        """
+        prunable: list[BackupFile] = []
+        for index, file in enumerate(files):
+            too_many = retention_count > 0 and index >= retention_count
+            too_old = retention_days > 0 and file.age_days > retention_days
+            if too_many or too_old:
+                prunable.append(file)
+        return prunable
+
+    def report(
+        self,
+        project_name: str,
+        backup_dir: Path,
+        *,
+        retention_count: int,
+        retention_days: int,
+        max_dir_size_mb: int,
+    ) -> BackupDirReport:
+        """Build a health report for a project's backup directory."""
+        files = self.list_backups(project_name, backup_dir)
+        prunable = self._select_prunable(
+            files, retention_count=retention_count, retention_days=retention_days
+        )
+        return BackupDirReport(
+            project=project_name,
+            directory=backup_dir.expanduser(),
+            files=files,
+            total_size=sum(f.size for f in files),
+            max_size=max_dir_size_mb * 1024 * 1024,
+            retention_count=retention_count,
+            retention_days=retention_days,
+            prunable=prunable,
+        )
+
+    def prune_backups(
+        self,
+        project_name: str,
+        backup_dir: Path,
+        *,
+        retention_count: int,
+        retention_days: int,
+    ) -> list[BackupFile]:
+        """Delete backups beyond retention. Honors the runner's dry-run mode.
+
+        Returns:
+            The files that were (or, in dry-run, would be) removed.
+        """
+        files = self.list_backups(project_name, backup_dir)
+        prunable = self._select_prunable(
+            files, retention_count=retention_count, retention_days=retention_days
+        )
+        for file in prunable:
+            if self.runner.dry_run:
+                logger.info("supabase.prune.dry_run", path=str(file.path))
+                continue
+            try:
+                file.path.unlink()
+                logger.info("supabase.prune.remove", path=str(file.path))
+            except OSError as exc:  # pragma: no cover - filesystem edge
+                logger.warning("supabase.prune.failed", path=str(file.path), error=str(exc))
+        return prunable
