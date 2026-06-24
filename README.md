@@ -53,6 +53,34 @@ jt doctor
 Update later with `uv tool upgrade janitor-cli`; remove with
 `uv tool uninstall janitor-cli`.
 
+### Set up on a new machine (e.g. a second Mac)
+
+Janitor is per-machine — install it on every box you want to keep tidy
+(MacBook Air, Mac mini, homelab nodes). On a fresh machine:
+
+```bash
+# 1. Install uv (skip if already present)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 2. Install jt globally — uv fetches Python 3.14 + all deps
+uv tool install --from git+https://github.com/silverbeer/janitor.git janitor-cli
+
+# 3. Ensure ~/.local/bin is on PATH, then reload your shell
+uv tool update-shell
+source ~/.zshrc          # or open a new terminal
+
+# 4. Verify
+jt --version
+jt doctor                # confirms Docker, Homebrew, k8s, Supabase, disk
+```
+
+> **If `jt: command not found`:** the install succeeded but `~/.local/bin`
+> isn't on your `PATH`. `uv tool update-shell` fixes this; restart the shell
+> afterward. Confirm with `which jt` → `~/.local/bin/jt`.
+
+Keep machines in sync by re-running `uv tool upgrade janitor-cli` on each after
+a new release.
+
 ### From a clone (for development)
 
 ```bash
