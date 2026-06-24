@@ -22,7 +22,7 @@ homelab operators.
 | `jt disk`     | Filesystem usage, largest files/dirs, common space offenders |
 | `jt brew`     | Outdated packages, upgrades, cleanup of old versions |
 | `jt logs`     | Find large logs, delete stale ones |
-| `jt supabase` | Discover local projects, show status, timestamped backups |
+| `jt supabase` | Discover local projects, show status, timestamped backups + retention/size hygiene |
 | `jt k3s`      | Cluster/node/pod health, clean up completed jobs |
 
 Every destructive command supports **`--dry-run`** (preview) and **`--yes`**
@@ -123,7 +123,8 @@ jt logs size                    # large log files
 jt logs clean --max-age 14      # delete logs older than 14 days
 
 jt supabase list                # discover + status
-jt supabase backup my-project   # timestamped DB dump
+jt supabase backup my-project   # timestamped DB dump (+ auto-prune to retention)
+jt supabase backups             # list backups, sizes, flag retention/size breaches
 
 jt k3s status                   # nodes + pod health
 jt k3s cleanup                  # delete completed jobs

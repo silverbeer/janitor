@@ -26,3 +26,19 @@ min_size_mb = 10           # Report logs above this size
 [supabase]
 search_paths = ["~/gitrepos", "~/projects"]
 backup_dir = "~/.janitor/backups/supabase"
+retention_count = 5        # Keep this many newest backups per project (0 = unlimited)
+retention_days = 0         # Delete backups older than N days (0 = no age limit)
+max_dir_size_mb = 2000     # Warn when a backup dir exceeds this size (0 = no limit)
+
+# Role -> password map for local user sync (DEV credentials only; never prod).
+[supabase.role_passwords]
+admin = "admin123"
+default = "fan123"
+
+# Per-project overrides. Any omitted key falls back to the [supabase] defaults.
+# Secrets (prod DB URL, service-role keys) are referenced by env-var NAME and
+# read from the environment — never store the secret value in this file.
+# [supabase.projects.mt]
+# backup_dir = "~/backups/mt"
+# retention_count = 3
+# max_dir_size_mb = 500

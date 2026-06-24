@@ -29,10 +29,17 @@ __all__ = [
     "JanitorConfig",
     "LogsConfig",
     "SupabaseConfig",
+    "SupabaseProjectConfig",
     "config_path",
     "get_config",
     "load_config",
 ]
+
+#: Default role -> password map for local user sync (DEV credentials only).
+_DEFAULT_ROLE_PASSWORDS = {
+    "admin": "admin123",
+    "default": "fan123",
+}
 
 
 def config_path() -> Path:
@@ -85,8 +92,36 @@ class LogsConfig(BaseModel):
     min_size_mb: int = Field(default=10, ge=0, description="Report logs above this size.")
 
 
+class SupabaseProjectConfig(BaseModel):
+    """Per-project Supabase backup/restore overrides.
+
+    Unset (``None``) numeric fields fall back to the shared
+    :class:`SupabaseConfig` defaults, so a project only declares what differs.
+    """
+
+    backup_dir: Path | None = Field(
+        default=None,
+        description="Override the shared backup dir for this project.",
+    )
+    retention_count: int | None = Field(
+        default=None,
+        ge=0,
+        description="Keep this many newest backups (0 = unlimited).",
+    )
+    retention_days: int | None = Field(
+        default=None,
+        ge=0,
+        description="Delete backups older than this many days (0 = no age limit).",
+    )
+    max_dir_size_mb: int | None = Field(
+        default=None,
+        ge=0,
+        description="Warn when the backup dir exceeds this size (0 = no limit).",
+    )
+
+
 class SupabaseConfig(BaseModel):
-    """Supabase project discovery defaults."""
+    """Supabase project discovery, backup, and retention defaults."""
 
     search_paths: list[Path] = Field(
         default_factory=lambda: [Path.home() / "gitrepos", Path.home() / "projects"],
@@ -96,6 +131,49 @@ class SupabaseConfig(BaseModel):
         default_factory=lambda: Path.home() / ".janitor" / "backups" / "supabase",
         description="Destination for timestamped backups.",
     )
+    retention_count: int = Field(
+        default=5,
+        ge=0,
+        description="Default backups to keep per project (0 = unlimited).",
+    )
+    retention_days: int = Field(
+        default=0,
+        ge=0,
+        description="Default age limit in days for backups (0 = no age limit).",
+    )
+    max_dir_size_mb: int = Field(
+        default=2000,
+        ge=0,
+        description="Default size ceiling per backup dir before warning (0 = no limit).",
+    )
+    role_passwords: dict[str, str] = Field(
+        default_factory=lambda: dict(_DEFAULT_ROLE_PASSWORDS),
+        description="Role -> password map for local user sync (DEV credentials only).",
+    )
+    projects: dict[str, SupabaseProjectConfig] = Field(
+        default_factory=dict,
+        description="Per-project overrides keyed by project name.",
+    )
+
+    def project(self, name: str) -> SupabaseProjectConfig:
+        """Return the override block for ``name`` (empty defaults if absent)."""
+        return self.projects.get(name, SupabaseProjectConfig())
+
+    def resolved_backup_dir(self, name: str) -> Path:
+        """Backup dir for ``name`` — per-project override else the shared dir."""
+        override = self.project(name).backup_dir
+        return (override or self.backup_dir).expanduser()
+
+    def resolved_retention(self, name: str) -> tuple[int, int, int]:
+        """Return ``(retention_count, retention_days, max_dir_size_mb)`` for ``name``.
+
+        Per-project values win; ``None`` falls back to the shared defaults.
+        """
+        proj = self.project(name)
+        count = self.retention_count if proj.retention_count is None else proj.retention_count
+        days = self.retention_days if proj.retention_days is None else proj.retention_days
+        max_mb = self.max_dir_size_mb if proj.max_dir_size_mb is None else proj.max_dir_size_mb
+        return count, days, max_mb
 
 
 class JanitorConfig(BaseSettings):
