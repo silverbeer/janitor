@@ -141,6 +141,28 @@ class SupabaseProjectConfig(BaseModel):
         description="SQL LIKE patterns of usernames to skip during user sync.",
     )
 
+    # ---- sync-users (Admin API) ----
+    prod_api_url: str | None = Field(
+        default=None,
+        description="Prod Supabase API URL, e.g. https://<ref>.supabase.co.",
+    )
+    prod_service_key_env: str | None = Field(
+        default=None,
+        description="NAME of the env var holding the prod service-role key.",
+    )
+    local_api_url: str = Field(
+        default="http://127.0.0.1:54321",
+        description="Local Supabase API URL.",
+    )
+    local_service_key_env: str | None = Field(
+        default=None,
+        description="NAME of the env var holding the local service-role key.",
+    )
+    user_passwords: dict[str, str] = Field(
+        default_factory=dict,
+        description="email -> local password. The keys are the default sync target list.",
+    )
+
 
 class SupabaseConfig(BaseModel):
     """Supabase project discovery, backup, and retention defaults."""
@@ -207,6 +229,31 @@ class SupabaseConfig(BaseModel):
         if not env_name:
             return None
         return os.environ.get(env_name) or None
+
+    def resolved_service_key(self, name: str, *, prod: bool) -> str | None:
+        """Return the prod or local service-role key for ``name`` from its env var."""
+        proj = self.project(name)
+        env_name = proj.prod_service_key_env if prod else proj.local_service_key_env
+        if not env_name:
+            return None
+        return os.environ.get(env_name) or None
+
+    def sync_targets(self, name: str) -> list[str]:
+        """Default sync list = the emails named in the project's user_passwords."""
+        return list(self.project(name).user_passwords.keys())
+
+    def resolved_password(self, name: str, *, email: str, role: str | None) -> str:
+        """Resolve a user's local password.
+
+        Order: per-user (``user_passwords[email]``) → role map
+        (``role_passwords[role]``) → ``role_passwords['default']`` → ``"fan123"``.
+        """
+        proj = self.project(name)
+        if email in proj.user_passwords:
+            return proj.user_passwords[email]
+        if role and role in self.role_passwords:
+            return self.role_passwords[role]
+        return self.role_passwords.get("default", "fan123")
 
 
 class JanitorConfig(BaseSettings):

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from janitor.models.system import AdminUser
 from janitor.services.supabase import SupabaseService, _is_local_url, _split_pg_secret
 from tests.conftest import FakeRunner
 
@@ -206,3 +207,79 @@ def test_restore_runs_reset_dump_load(tmp_path: Path, fake_runner: FakeRunner) -
     assert "localpw" not in flat_argv
     assert {"PGPASSWORD": "prodpass"} in fake_runner.envs
     assert {"PGPASSWORD": "localpw"} in fake_runner.envs
+
+
+# ---- sync-users ------------------------------------------------------------
+
+
+class FakeAdmin:
+    """In-memory AdminClient for tests."""
+
+    def __init__(self, users: list[AdminUser] | None = None) -> None:
+        self._users = users or []
+        self.upserts: list[tuple[AdminUser, str]] = []
+        self.fail_on: str | None = None
+
+    def list_users(self) -> list[AdminUser]:
+        return list(self._users)
+
+    def upsert_user(self, user: AdminUser, password: str) -> None:
+        if self.fail_on and user.email == self.fail_on:
+            raise RuntimeError("boom")
+        self.upserts.append((user, password))
+
+
+def _pw(_user: AdminUser) -> str:
+    return "pw"
+
+
+def test_sync_users_default_targets(fake_runner: FakeRunner) -> None:
+    prod = FakeAdmin([AdminUser(id="1", email="a@x.com"), AdminUser(id="2", email="b@x.com")])
+    local = FakeAdmin()
+    results = SupabaseService(runner=fake_runner).sync_users(
+        prod_admin=prod, local_admin=local, password_for=_pw, targets=["a@x.com"]
+    )
+    assert [r.email for r in results] == ["a@x.com"]
+    assert results[0].action == "synced"
+    # Prod id preserved on the local upsert; password came from the resolver.
+    assert local.upserts[0][0].id == "1"
+    assert local.upserts[0][1] == "pw"
+
+
+def test_sync_users_include_all_honors_excludes(fake_runner: FakeRunner) -> None:
+    prod = FakeAdmin(
+        [
+            AdminUser(id="1", email="real@x.com"),
+            AdminUser(id="2", email="contract_test_9@x.com"),
+        ]
+    )
+    local = FakeAdmin()
+    results = SupabaseService(runner=fake_runner).sync_users(
+        prod_admin=prod,
+        local_admin=local,
+        password_for=_pw,
+        include_all=True,
+        exclude_patterns=["contract_test_%"],
+    )
+    assert [r.email for r in results] == ["real@x.com"]
+
+
+def test_sync_users_dry_run_no_upsert(make_runner) -> None:  # type: ignore[no-untyped-def]
+    prod = FakeAdmin([AdminUser(id="1", email="a@x.com")])
+    local = FakeAdmin()
+    results = SupabaseService(runner=make_runner(dry_run=True)).sync_users(
+        prod_admin=prod, local_admin=local, password_for=_pw, targets=["a@x.com"]
+    )
+    assert results[0].dry_run is True
+    assert local.upserts == []  # nothing written
+
+
+def test_sync_users_failure_recorded(fake_runner: FakeRunner) -> None:
+    prod = FakeAdmin([AdminUser(id="1", email="a@x.com")])
+    local = FakeAdmin()
+    local.fail_on = "a@x.com"
+    results = SupabaseService(runner=fake_runner).sync_users(
+        prod_admin=prod, local_admin=local, password_for=_pw, targets=["a@x.com"]
+    )
+    assert results[0].action == "failed"
+    assert results[0].detail == "boom"
