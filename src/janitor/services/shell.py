@@ -6,9 +6,10 @@ single seam and so that dry-run / logging behavior is centralized.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from janitor.logging import get_logger
 from janitor.models.common import CommandResult
@@ -49,6 +50,7 @@ class ShellRunner:
         check: bool = False,
         timeout: float | None = 60.0,
         mutating: bool = False,
+        env: Mapping[str, str] | None = None,
     ) -> CommandResult:
         """Execute ``command`` and return a :class:`CommandResult`.
 
@@ -57,13 +59,18 @@ class ShellRunner:
             check: Raise :class:`CommandError` on non-zero exit.
             timeout: Seconds before the command is killed.
             mutating: Marks the command as state-changing; skipped during dry-run.
+            env: Extra environment variables merged over the current environment.
+                Use this to pass secrets (e.g. ``PGPASSWORD``) so they never
+                appear in the argument vector or the command logs.
         """
         cmd = list(command)
         if mutating and self.dry_run:
             logger.info("dry_run.skip", command=cmd)
             return CommandResult(command=cmd, returncode=0, stdout="", stderr="")
 
+        # ``env`` is intentionally omitted from the log — it carries secrets.
         logger.debug("shell.run", command=cmd)
+        child_env = {**os.environ, **env} if env else None
         try:
             completed = subprocess.run(
                 cmd,
@@ -71,6 +78,7 @@ class ShellRunner:
                 text=True,
                 timeout=timeout,
                 check=False,
+                env=child_env,
             )
         except FileNotFoundError as exc:
             result = CommandResult(command=cmd, returncode=127, stderr=str(exc))

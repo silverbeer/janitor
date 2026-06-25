@@ -1,12 +1,19 @@
-"""Supabase project discovery, backup, and backup-dir hygiene service."""
+"""Supabase project discovery, backup, hygiene, and restore service."""
 
 from __future__ import annotations
 
+import tempfile
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from janitor.logging import get_logger
-from janitor.models.system import BackupDirReport, BackupFile, SupabaseProject
+from janitor.models.system import (
+    BackupDirReport,
+    BackupFile,
+    RestoreResult,
+    SupabaseProject,
+)
 from janitor.services.shell import ShellRunner, which
 
 __all__ = ["SupabaseService"]
@@ -14,6 +21,29 @@ __all__ = ["SupabaseService"]
 logger = get_logger(__name__)
 
 _SECONDS_PER_DAY = 86_400
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+
+
+def _split_pg_secret(url: str) -> tuple[str, str | None]:
+    """Split a Postgres URL into a password-free URI and the password.
+
+    The sanitized URI is safe to place on the command line / in logs; the
+    password is returned separately to pass via ``PGPASSWORD``.
+    """
+    parts = urlsplit(url)
+    user = parts.username or ""
+    host = parts.hostname or ""
+    port = f":{parts.port}" if parts.port else ""
+    userinfo = f"{user}@" if user else ""
+    sanitized = urlunsplit(
+        (parts.scheme, f"{userinfo}{host}{port}", parts.path, parts.query, parts.fragment)
+    )
+    return sanitized, parts.password
+
+
+def _is_local_url(url: str) -> bool:
+    """True when ``url`` points at a loopback host (restore safety guard)."""
+    return urlsplit(url).hostname in _LOCAL_HOSTS
 
 
 class SupabaseService:
@@ -190,3 +220,98 @@ class SupabaseService:
             except OSError as exc:  # pragma: no cover - filesystem edge
                 logger.warning("supabase.prune.failed", path=str(file.path), error=str(exc))
         return prunable
+
+    # ---- restore-from-prod --------------------------------------------------
+
+    def pg_client_available(self) -> bool:
+        """True when both ``pg_dump`` and ``psql`` are on PATH."""
+        return which("pg_dump") is not None and which("psql") is not None
+
+    def restore_from_prod(
+        self,
+        project_name: str,
+        project_path: Path,
+        *,
+        local_db_url: str,
+        prod_db_url: str,
+        data_schemas: list[str],
+    ) -> RestoreResult:
+        """Reset the local DB to migrations, then load prod data into it.
+
+        Steps: ``supabase db reset`` (schema from migrations) → ``pg_dump`` the
+        prod data for ``data_schemas`` → ``psql`` load into local. The prod
+        dump is data-only and deleted after load (it may hold PII). Passwords
+        travel via ``PGPASSWORD``, never the argument vector.
+
+        Raises:
+            ValueError: if ``local_db_url`` does not point at a loopback host.
+        """
+        if not _is_local_url(local_db_url):
+            raise ValueError(
+                f"refusing to restore into non-local target: {local_db_url!r} "
+                "(local_db_url must point at localhost / 127.0.0.1)"
+            )
+        dump_path = Path(tempfile.gettempdir()) / f"{project_name}-prod-restore.sql"
+
+        if self.runner.dry_run:
+            logger.info("supabase.restore.dry_run", project=project_name)
+            return RestoreResult(project=project_name, dump_path=dump_path, dry_run=True)
+
+        # 1. Reset local — schema comes from migrations, not the dump.
+        self.runner.run(
+            ["supabase", "db", "reset", "--workdir", str(project_path)],
+            mutating=True,
+            check=True,
+            timeout=600,
+        )
+        # 2. Dump prod data-only for the configured schemas.
+        prod_uri, prod_pw = _split_pg_secret(prod_db_url)
+        schema_args: list[str] = []
+        for schema in data_schemas:
+            schema_args += ["--schema", schema]
+        self.runner.run(
+            [
+                "pg_dump",
+                "--data-only",
+                "--disable-triggers",
+                "--no-owner",
+                "--no-acl",
+                *schema_args,
+                "--file",
+                str(dump_path),
+                prod_uri,
+            ],
+            check=True,
+            timeout=1800,
+            env={"PGPASSWORD": prod_pw} if prod_pw else None,
+        )
+        dumped = dump_path.stat().st_size if dump_path.exists() else 0
+        # 3. Load into local, then shred the PII-bearing dump.
+        local_uri, local_pw = _split_pg_secret(local_db_url)
+        try:
+            self.runner.run(
+                [
+                    "psql",
+                    "--single-transaction",
+                    "--set",
+                    "ON_ERROR_STOP=on",
+                    "--dbname",
+                    local_uri,
+                    "--file",
+                    str(dump_path),
+                ],
+                mutating=True,
+                check=True,
+                timeout=1800,
+                env={"PGPASSWORD": local_pw} if local_pw else None,
+            )
+        finally:
+            dump_path.unlink(missing_ok=True)
+        logger.info("supabase.restore.done", project=project_name, dumped_bytes=dumped)
+        return RestoreResult(
+            project=project_name,
+            reset=True,
+            dump_path=dump_path,
+            dumped_bytes=dumped,
+            loaded=True,
+        )

@@ -125,6 +125,7 @@ jt logs clean --max-age 14      # delete logs older than 14 days
 jt supabase list                # discover + status
 jt supabase backup my-project   # timestamped DB dump (+ auto-prune to retention)
 jt supabase backups             # list backups, sizes, flag retention/size breaches
+jt supabase restore-from-prod my-project   # reset local + load prod data (destructive)
 
 jt k3s status                   # nodes + pod health
 jt k3s cleanup                  # delete completed jobs

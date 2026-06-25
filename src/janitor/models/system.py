@@ -12,6 +12,7 @@ __all__ = [
     "BrewOutdated",
     "BrewStatus",
     "LogFile",
+    "RestoreResult",
     "SupabaseProject",
 ]
 
@@ -98,3 +99,14 @@ class BackupDirReport(BaseModel):
     def healthy(self) -> bool:
         """True when neither the size nor retention ceilings are breached."""
         return not (self.over_size or self.over_count or self.prunable)
+
+
+class RestoreResult(BaseModel):
+    """Outcome of restoring prod data into a local Supabase database."""
+
+    project: str
+    reset: bool = False
+    dump_path: Path
+    dumped_bytes: int = 0
+    loaded: bool = False
+    dry_run: bool = False
