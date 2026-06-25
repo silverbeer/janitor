@@ -76,3 +76,18 @@ def test_supabase_per_project_override(tmp_path: Path, monkeypatch: pytest.Monke
     assert sb.resolved_backup_dir("mt") == Path("/tmp/mt-backups")
     # A project with no override block uses the shared defaults.
     assert sb.resolved_retention("other") == (5, 0, 2000)
+
+
+def test_supabase_resolved_prod_db_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        "[supabase.projects.stk]\nprod_db_url_env = 'STK_PROD_DB_URL'\n",
+        encoding="utf-8",
+    )
+    sb = load_config(cfg).supabase
+    monkeypatch.delenv("STK_PROD_DB_URL", raising=False)
+    assert sb.resolved_prod_db_url("stk") is None  # env unset
+    monkeypatch.setenv("STK_PROD_DB_URL", "postgresql://u:p@prod/db")
+    assert sb.resolved_prod_db_url("stk") == "postgresql://u:p@prod/db"
+    # Project without prod_db_url_env configured -> None.
+    assert sb.resolved_prod_db_url("other") is None

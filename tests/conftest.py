@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 import pytest
 
@@ -20,6 +20,7 @@ class FakeRunner(ShellRunner):
         super().__init__(dry_run=dry_run)
         self._stubs: list[tuple[tuple[str, ...], CommandResult]] = []
         self.calls: list[list[str]] = []
+        self.envs: list[dict[str, str]] = []
 
     def stub(
         self,
@@ -46,9 +47,12 @@ class FakeRunner(ShellRunner):
         check: bool = False,
         timeout: float | None = 60.0,
         mutating: bool = False,
+        env: Mapping[str, str] | None = None,
     ) -> CommandResult:
         cmd = list(command)
         self.calls.append(cmd)
+        if env is not None:
+            self.envs.append(dict(env))
         if mutating and self.dry_run:
             return CommandResult(command=cmd, returncode=0)
         for prefix, result in self._stubs:

@@ -119,6 +119,28 @@ class SupabaseProjectConfig(BaseModel):
         description="Warn when the backup dir exceeds this size (0 = no limit).",
     )
 
+    # ---- restore-from-prod ----
+    path: Path | None = Field(
+        default=None,
+        description="Project root (holds supabase/). Defaults to the discovered path.",
+    )
+    local_db_url: str = Field(
+        default="postgresql://postgres:postgres@127.0.0.1:54322/postgres",
+        description="Local Supabase Postgres connection string.",
+    )
+    prod_db_url_env: str | None = Field(
+        default=None,
+        description="NAME of the env var holding the prod DB URL (value never stored here).",
+    )
+    data_schemas: list[str] = Field(
+        default_factory=lambda: ["public"],
+        description="Schemas whose data is dumped from prod and loaded locally.",
+    )
+    exclude_user_patterns: list[str] = Field(
+        default_factory=list,
+        description="SQL LIKE patterns of usernames to skip during user sync.",
+    )
+
 
 class SupabaseConfig(BaseModel):
     """Supabase project discovery, backup, and retention defaults."""
@@ -174,6 +196,17 @@ class SupabaseConfig(BaseModel):
         days = self.retention_days if proj.retention_days is None else proj.retention_days
         max_mb = self.max_dir_size_mb if proj.max_dir_size_mb is None else proj.max_dir_size_mb
         return count, days, max_mb
+
+    def resolved_prod_db_url(self, name: str) -> str | None:
+        """Return the prod DB URL for ``name`` from its configured env var.
+
+        Returns ``None`` when the project declares no ``prod_db_url_env`` or the
+        named variable is unset in the environment.
+        """
+        env_name = self.project(name).prod_db_url_env
+        if not env_name:
+            return None
+        return os.environ.get(env_name) or None
 
 
 class JanitorConfig(BaseSettings):

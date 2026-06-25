@@ -42,3 +42,8 @@ default = "fan123"
 # backup_dir = "~/backups/mt"
 # retention_count = 3
 # max_dir_size_mb = 500
+# # restore-from-prod: reset local to migrations, then load prod data
+# local_db_url = "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
+# prod_db_url_env = "MT_PROD_DATABASE_URL"   # NAME of env var holding the prod URL
+# data_schemas = ["public"]                  # schemas dumped from prod
+# exclude_user_patterns = ["contract_test_%", "test_login_%"]  # (used by future user sync)

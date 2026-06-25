@@ -6,7 +6,9 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from janitor.services.supabase import SupabaseService
+import pytest
+
+from janitor.services.supabase import SupabaseService, _is_local_url, _split_pg_secret
 from tests.conftest import FakeRunner
 
 
@@ -143,3 +145,64 @@ def test_prune_dry_run_keeps_files(tmp_path: Path, make_runner) -> None:  # type
     )
     assert len(pruned) == 2  # reported as would-prune
     assert len(list(backup_dir.glob("alpha-*.sql"))) == 3  # nothing deleted
+
+
+# ---- restore-from-prod -----------------------------------------------------
+
+_PROD_URL = "postgresql://produser:prodpass@prod.example.com:6543/postgres"
+_LOCAL_URL = "postgresql://postgres:localpw@127.0.0.1:54322/postgres"
+
+
+def test_split_pg_secret_strips_password() -> None:
+    sanitized, password = _split_pg_secret(_PROD_URL)
+    assert password == "prodpass"
+    assert "prodpass" not in sanitized
+    assert sanitized == "postgresql://produser@prod.example.com:6543/postgres"
+
+
+def test_is_local_url() -> None:
+    assert _is_local_url(_LOCAL_URL) is True
+    assert _is_local_url(_PROD_URL) is False
+
+
+def test_restore_rejects_nonlocal_target(tmp_path: Path, fake_runner: FakeRunner) -> None:
+    with pytest.raises(ValueError, match="non-local target"):
+        SupabaseService(runner=fake_runner).restore_from_prod(
+            "alpha",
+            tmp_path,
+            local_db_url=_PROD_URL,  # not loopback -> guard trips
+            prod_db_url=_PROD_URL,
+            data_schemas=["public"],
+        )
+
+
+def test_restore_dry_run_runs_nothing(tmp_path: Path, make_runner) -> None:  # type: ignore[no-untyped-def]
+    runner = make_runner(dry_run=True)
+    result = SupabaseService(runner=runner).restore_from_prod(
+        "alpha", tmp_path, local_db_url=_LOCAL_URL, prod_db_url=_PROD_URL, data_schemas=["public"]
+    )
+    assert result.dry_run is True
+    assert result.loaded is False
+    assert runner.calls == []  # nothing executed
+
+
+def test_restore_runs_reset_dump_load(tmp_path: Path, fake_runner: FakeRunner) -> None:
+    result = SupabaseService(runner=fake_runner).restore_from_prod(
+        "alpha",
+        tmp_path,
+        local_db_url=_LOCAL_URL,
+        prod_db_url=_PROD_URL,
+        data_schemas=["public", "extra"],
+    )
+    assert result.reset is True and result.loaded is True
+    programs = [c[0] for c in fake_runner.calls]
+    assert programs == ["supabase", "pg_dump", "psql"]
+    # Both schemas requested on the dump.
+    dump_cmd = next(c for c in fake_runner.calls if c[0] == "pg_dump")
+    assert dump_cmd.count("--schema") == 2
+    # Passwords travel via env, never the argument vector.
+    flat_argv = " ".join(arg for cmd in fake_runner.calls for arg in cmd)
+    assert "prodpass" not in flat_argv
+    assert "localpw" not in flat_argv
+    assert {"PGPASSWORD": "prodpass"} in fake_runner.envs
+    assert {"PGPASSWORD": "localpw"} in fake_runner.envs
