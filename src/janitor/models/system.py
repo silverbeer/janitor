@@ -7,6 +7,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 __all__ = [
+    "AdminUser",
     "BackupDirReport",
     "BackupFile",
     "BrewOutdated",
@@ -14,6 +15,7 @@ __all__ = [
     "LogFile",
     "RestoreResult",
     "SupabaseProject",
+    "UserSyncResult",
 ]
 
 
@@ -109,4 +111,25 @@ class RestoreResult(BaseModel):
     dump_path: Path
     dumped_bytes: int = 0
     loaded: bool = False
+    dry_run: bool = False
+
+
+class AdminUser(BaseModel):
+    """An auth user as seen through the Supabase Admin API."""
+
+    id: str
+    email: str
+    role: str | None = None
+    user_metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class UserSyncResult(BaseModel):
+    """Outcome of syncing a single auth user into the local database."""
+
+    email: str
+    user_id: str
+    password: str
+    #: One of: ``"synced"``, ``"skipped"``, ``"failed"``.
+    action: str
+    detail: str | None = None
     dry_run: bool = False

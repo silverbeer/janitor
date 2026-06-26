@@ -37,12 +37,18 @@ Issues = "https://github.com/silverbeer/janitor/issues"
 jt = "janitor.main:app"
 
 [project.optional-dependencies]
+# Supabase Admin API client, needed only for `jt supabase sync-users`.
+# Kept optional so the core CLI stays lean: `uv tool install 'janitor-cli[supabase]'`.
+supabase = [
+    "supabase>=2.0.0",
+]
 dev = [
     "pytest>=8.3.0",
     "pytest-cov>=6.0.0",
     "pytest-mock>=3.14.0",
     "ruff>=0.8.0",
     "mypy>=1.13.0",
+    "supabase>=2.0.0",
 ]
 
 [build-system]

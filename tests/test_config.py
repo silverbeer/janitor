@@ -91,3 +91,24 @@ def test_supabase_resolved_prod_db_url(tmp_path: Path, monkeypatch: pytest.Monke
     assert sb.resolved_prod_db_url("stk") == "postgresql://u:p@prod/db"
     # Project without prod_db_url_env configured -> None.
     assert sb.resolved_prod_db_url("other") is None
+
+
+def test_supabase_resolved_password(tmp_path: Path) -> None:
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        "[supabase.role_passwords]\n"
+        'admin = "admin123"\n'
+        'default = "fan123"\n'
+        "[supabase.projects.stk.user_passwords]\n"
+        '"owner@x.com" = "letmein"\n',
+        encoding="utf-8",
+    )
+    sb = load_config(cfg).supabase
+    # per-user wins
+    assert sb.resolved_password("stk", email="owner@x.com", role="admin") == "letmein"
+    # role map next
+    assert sb.resolved_password("stk", email="someone@x.com", role="admin") == "admin123"
+    # default fallback
+    assert sb.resolved_password("stk", email="someone@x.com", role=None) == "fan123"
+    # sync targets = user_passwords keys
+    assert sb.sync_targets("stk") == ["owner@x.com"]

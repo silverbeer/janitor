@@ -7,8 +7,11 @@ import json
 import pytest
 from typer.testing import CliRunner
 
+from janitor.config import JanitorConfig, SupabaseProjectConfig
 from janitor.main import app
+from janitor.models.system import AdminUser
 from tests.conftest import FakeRunner
+from tests.test_services_supabase import FakeAdmin
 
 runner = CliRunner()
 pytestmark = pytest.mark.integration
@@ -323,3 +326,42 @@ def test_k3s_cleanup(patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
     result = runner.invoke(app, ["--yes", "k3s", "cleanup"])
     assert result.exit_code == 0
     assert "done" in result.stdout
+
+
+# --- supabase sync-users --------------------------------------------------
+
+
+def test_sync_users_missing_config(
+    patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("janitor.main.load_config", JanitorConfig)  # no projects configured
+    result = runner.invoke(app, ["supabase", "sync-users", "stk"])
+    assert result.exit_code == 1
+
+
+def test_sync_users_happy_path(patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = JanitorConfig()
+    cfg.supabase.projects["stk"] = SupabaseProjectConfig(
+        prod_api_url="https://ref.supabase.co",
+        prod_service_key_env="PK",
+        local_service_key_env="LK",
+        user_passwords={"a@x.com": "letmein"},
+    )
+    monkeypatch.setattr("janitor.main.load_config", lambda: cfg)
+    monkeypatch.setenv("PK", "prodkey")
+    monkeypatch.setenv("LK", "localkey")
+
+    prod = FakeAdmin([AdminUser(id="1", email="a@x.com"), AdminUser(id="2", email="b@x.com")])
+    local = FakeAdmin()
+    monkeypatch.setattr(
+        "janitor.commands.supabase.make_admin_client",
+        lambda url, key: prod if "supabase.co" in url else local,
+    )
+
+    result = runner.invoke(app, ["--yes", "supabase", "sync-users", "stk"])
+    assert result.exit_code == 0
+    assert "a@x.com" in result.stdout
+    assert "synced" in result.stdout
+    # Only the user_passwords target was synced, with its prod id preserved.
+    assert [u.email for u, _ in local.upserts] == ["a@x.com"]
+    assert local.upserts[0][0].id == "1"

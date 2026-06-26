@@ -46,4 +46,13 @@ default = "fan123"
 # local_db_url = "postgresql://postgres:postgres@127.0.0.1:54322/postgres"
 # prod_db_url_env = "MT_PROD_DATABASE_URL"   # NAME of env var holding the prod URL
 # data_schemas = ["public"]                  # schemas dumped from prod
-# exclude_user_patterns = ["contract_test_%", "test_login_%"]  # (used by future user sync)
+# exclude_user_patterns = ["contract_test_%", "test_login_%"]
+# # sync-users: prod auth users -> local with known passwords (Admin API)
+# prod_api_url = "https://<ref>.supabase.co"
+# prod_service_key_env = "MT_PROD_SERVICE_ROLE_KEY"   # NAME of env var (secret)
+# local_service_key_env = "MT_LOCAL_SERVICE_ROLE_KEY" # NAME of env var (secret)
+#
+# A tiny project (e.g. STK, one user): the user_passwords keys ARE the sync
+# list, so `jt supabase sync-users stk` syncs exactly these users.
+# [supabase.projects.stk.user_passwords]
+# "you@example.com" = "letmein"

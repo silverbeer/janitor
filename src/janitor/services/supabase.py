@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from janitor.logging import get_logger
 from janitor.models.system import (
+    AdminUser,
     BackupDirReport,
     BackupFile,
     RestoreResult,
     SupabaseProject,
+    UserSyncResult,
 )
 from janitor.services.shell import ShellRunner, which
+from janitor.services.supabase_admin import AdminClient
 
 __all__ = ["SupabaseService"]
 
@@ -44,6 +48,18 @@ def _split_pg_secret(url: str) -> tuple[str, str | None]:
 def _is_local_url(url: str) -> bool:
     """True when ``url`` points at a loopback host (restore safety guard)."""
     return urlsplit(url).hostname in _LOCAL_HOSTS
+
+
+def _match_like(value: str, pattern: str) -> bool:
+    """Case-insensitive SQL-LIKE-ish match supporting a single ``%`` wildcard."""
+    value, pattern = value.lower(), pattern.lower()
+    if pattern.startswith("%") and pattern.endswith("%"):
+        return pattern.strip("%") in value
+    if pattern.endswith("%"):
+        return value.startswith(pattern[:-1])
+    if pattern.startswith("%"):
+        return value.endswith(pattern[1:])
+    return value == pattern
 
 
 class SupabaseService:
@@ -315,3 +331,81 @@ class SupabaseService:
             dumped_bytes=dumped,
             loaded=True,
         )
+
+    # ---- sync-users (Admin API) ---------------------------------------------
+
+    @staticmethod
+    def _select_users(
+        users: list[AdminUser],
+        *,
+        targets: list[str] | None,
+        include_all: bool,
+        exclude_patterns: list[str],
+    ) -> list[AdminUser]:
+        """Pick which prod users to sync.
+
+        ``include_all`` takes everything (minus exclusions); otherwise only
+        users whose email is in ``targets``. Exclusions always apply.
+        """
+        target_set = {t.lower() for t in targets} if targets is not None else None
+        selected: list[AdminUser] = []
+        for user in users:
+            email = user.email.lower()
+            if any(_match_like(email, pattern) for pattern in exclude_patterns):
+                continue
+            if include_all or (target_set is not None and email in target_set):
+                selected.append(user)
+        return selected
+
+    def sync_users(
+        self,
+        *,
+        prod_admin: AdminClient,
+        local_admin: AdminClient,
+        password_for: Callable[[AdminUser], str],
+        targets: list[str] | None = None,
+        include_all: bool = False,
+        exclude_patterns: list[str] | None = None,
+    ) -> list[UserSyncResult]:
+        """Sync selected prod auth users into the local project.
+
+        Each selected user is recreated locally with its prod id preserved and a
+        password from ``password_for``. Honors the runner's dry-run mode.
+        """
+        selected = self._select_users(
+            prod_admin.list_users(),
+            targets=targets,
+            include_all=include_all,
+            exclude_patterns=exclude_patterns or [],
+        )
+        dry = self.runner.dry_run
+        results: list[UserSyncResult] = []
+        for user in selected:
+            password = password_for(user)
+            if dry:
+                results.append(
+                    UserSyncResult(
+                        email=user.email,
+                        user_id=user.id,
+                        password=password,
+                        action="synced",
+                        dry_run=True,
+                    )
+                )
+                continue
+            try:
+                local_admin.upsert_user(user, password)
+                action, detail = "synced", None
+            except Exception as exc:  # report any client failure per-user, keep going
+                action, detail = "failed", str(exc)
+                logger.warning("supabase.sync_users.failed", email=user.email, error=str(exc))
+            results.append(
+                UserSyncResult(
+                    email=user.email,
+                    user_id=user.id,
+                    password=password,
+                    action=action,
+                    detail=detail,
+                )
+            )
+        return results

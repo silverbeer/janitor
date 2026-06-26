@@ -126,10 +126,15 @@ jt supabase list                # discover + status
 jt supabase backup my-project   # timestamped DB dump (+ auto-prune to retention)
 jt supabase backups             # list backups, sizes, flag retention/size breaches
 jt supabase restore-from-prod my-project   # reset local + load prod data (destructive)
+jt supabase sync-users my-project          # prod auth users -> local with known passwords
 
 jt k3s status                   # nodes + pod health
 jt k3s cleanup                  # delete completed jobs
 ```
+
+> `jt supabase sync-users` needs the Supabase Admin API client, which ships as
+> an optional extra to keep the core CLI lean:
+> `uv tool install --from git+https://github.com/silverbeer/janitor.git 'janitor-cli[supabase]'`
 
 ### Global flags
 
