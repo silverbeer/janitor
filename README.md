@@ -130,6 +130,8 @@ jt supabase restore-from-prod my-project   # reset local + load prod data (destr
 jt supabase sync-users my-project          # prod auth users -> local with known passwords
 
 jt secrets base                 # write the shared base .env.schema (repos @import it)
+jt secrets init [app]           # scaffold a repo .env.schema importing the base (+ gitignore fix)
+jt secrets doctor               # lint name parity: .env.schema ↔ Helm secretKeyRef vars
 jt secrets run -- <command>     # run a command with env resolved from 1Password (via varlock)
 
 jt k3s status                   # nodes + pod health

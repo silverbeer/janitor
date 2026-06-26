@@ -8,13 +8,22 @@ own variables. ``jt secrets run`` wraps ``varlock run`` to resolve those values
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from janitor.config import config_path
 from janitor.logging import get_logger
+from janitor.models.system import SecretsParityReport
 from janitor.services.shell import ShellRunner, which
 
 __all__ = ["ONE_PASSWORD_PLUGIN_VERSION", "SecretsService"]
+
+#: Matches a `NAME=` declaration (env var name at the start of a non-comment line).
+_VAR_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=")
+#: Matches a k8s `- name: NAME` immediately wired to a secretKeyRef.
+_SECRET_ENV_RE = re.compile(
+    r"-\s*name:\s*([A-Za-z_][A-Za-z0-9_]*)\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:",
+)
 
 logger = get_logger(__name__)
 
@@ -71,3 +80,92 @@ class SecretsService:
     def run(self, command: list[str]) -> int:
         """Run ``command`` under ``varlock run`` (interactive). Returns exit code."""
         return self.runner.exec_passthrough(["varlock", "run", "--", *command])
+
+    # ---- init ---------------------------------------------------------------
+
+    @staticmethod
+    def _repo_schema_template(app: str, base_path: Path) -> str:
+        prefix = app.upper().replace("-", "_").replace(".", "_")
+        return (
+            f"# {app} env schema — managed with `jt secrets`. Commit this file "
+            "(references only, no secret values).\n"
+            f"# @import({base_path})\n"
+            "# ---\n"
+            "# Declare this app's variables below. Secrets resolve from 1Password\n"
+            "# locally and from the platform (k8s/AWS) in cloud. Examples:\n"
+            "#\n"
+            "# @required @sensitive\n"
+            f"# {prefix}_PROD_SERVICE_ROLE_KEY=op(op://<vault>/{app}-prod/service_role_key)\n"
+            "# @required\n"
+            "# LOG_LEVEL=INFO\n"
+        )
+
+    def scaffold_schema(self, target_dir: Path, app: str) -> tuple[Path, str]:
+        """Create a repo ``.env.schema`` importing the shared base.
+
+        Returns ``(path, status)`` where status is ``created``, ``exists``
+        (left untouched), or ``would-create`` (dry-run).
+        """
+        path = target_dir / ".env.schema"
+        if path.exists():
+            return path, "exists"
+        if self.runner.dry_run:
+            return path, "would-create"
+        path.write_text(self._repo_schema_template(app, self.base_schema_path()), encoding="utf-8")
+        logger.info("secrets.init.scaffold", path=str(path))
+        return path, "created"
+
+    def ensure_gitignore_allows(self, target_dir: Path) -> str:
+        """Ensure ``.env.schema`` is committable; add a negation if it's ignored.
+
+        Returns ``ok`` (already committable), ``fixed`` (added ``!.env.schema``),
+        or ``would-fix`` (dry-run).
+        """
+        ignored = (
+            self.runner.run(
+                ["git", "-C", str(target_dir), "check-ignore", ".env.schema"]
+            ).returncode
+            == 0
+        )
+        if not ignored:
+            return "ok"
+        if self.runner.dry_run:
+            return "would-fix"
+        gitignore = target_dir / ".gitignore"
+        with gitignore.open("a", encoding="utf-8") as handle:
+            handle.write("\n# Varlock schema is reference-only — safe to commit\n!.env.schema\n")
+        logger.info("secrets.init.gitignore", path=str(gitignore))
+        return "fixed"
+
+    # ---- doctor -------------------------------------------------------------
+
+    @staticmethod
+    def parse_schema_vars(schema_path: Path) -> set[str]:
+        """Return the variable names declared in a ``.env.schema`` file."""
+        names: set[str] = set()
+        for line in schema_path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            match = _VAR_RE.match(stripped)
+            if match:
+                names.add(match.group(1))
+        return names
+
+    @staticmethod
+    def helm_secret_env_vars(helm_dir: Path) -> set[str]:
+        """Return env var names wired to a ``secretKeyRef`` across Helm templates."""
+        names: set[str] = set()
+        if not helm_dir.is_dir():
+            return names
+        for path in helm_dir.rglob("*.yaml"):
+            names.update(_SECRET_ENV_RE.findall(path.read_text(encoding="utf-8")))
+        return names
+
+    def parity(self, schema_vars: set[str], cloud_vars: set[str]) -> SecretsParityReport:
+        """Compare schema-declared vars against cloud secret-injected vars."""
+        return SecretsParityReport(
+            matched=sorted(schema_vars & cloud_vars),
+            only_schema=sorted(schema_vars - cloud_vars),
+            only_cloud=sorted(cloud_vars - schema_vars),
+        )
