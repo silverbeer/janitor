@@ -146,6 +146,10 @@ jt k3s cleanup                  # delete completed jobs
 > an optional extra to keep the core CLI lean:
 > `uv tool install --from git+https://github.com/silverbeer/janitor.git 'janitor-cli[supabase]'`
 
+> **📖 Full walkthrough:** [docs/supabase-guide.md](./docs/supabase-guide.md) —
+> step-by-step setup on a new machine (config, secrets, backup → restore →
+> sync-users), with a copy-paste STK example and troubleshooting.
+
 ### Global flags
 
 ```bash
