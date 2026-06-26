@@ -51,14 +51,14 @@ brew install libpq && brew link --force libpq
 the core CLI stays lean:
 
 ```bash
-uv tool install --from git+https://github.com/silverbeer/janitor.git 'janitor-cli[supabase]'
+uv tool install 'janitor-cli[supabase] @ git+https://github.com/silverbeer/janitor.git'
 uv tool update-shell && source ~/.zshrc      # ensure ~/.local/bin is on PATH
 jt --version
 jt doctor                                     # confirms Docker, Supabase CLI, etc.
 ```
 
 Already installed without the extra? Reinstall to add it:
-`uv tool install --from git+...janitor.git 'janitor-cli[supabase]' --reinstall`.
+`uv tool install 'janitor-cli[supabase] @ git+https://github.com/silverbeer/janitor.git' --reinstall`.
 
 ---
 
