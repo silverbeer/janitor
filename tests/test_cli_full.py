@@ -365,3 +365,40 @@ def test_sync_users_happy_path(patched_runner: FakeRunner, monkeypatch: pytest.M
     # Only the user_passwords target was synced, with its prod id preserved.
     assert [u.email for u, _ in local.upserts] == ["a@x.com"]
     assert local.upserts[0][0].id == "1"
+
+
+# --- secrets (varlock) ----------------------------------------------------
+
+
+def test_secrets_run_no_command(patched_runner: FakeRunner) -> None:
+    result = runner.invoke(app, ["secrets", "run"])
+    assert result.exit_code == 2
+
+
+def test_secrets_run_varlock_missing(
+    patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("janitor.services.secrets.which", lambda _: None)
+    result = runner.invoke(app, ["secrets", "run", "--", "echo", "hi"])
+    assert result.exit_code == 1
+
+
+def test_secrets_run_passthrough_exit_code(
+    patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("janitor.services.secrets.which", lambda _: "/usr/bin/varlock")
+    patched_runner.exec_code = 7
+    result = runner.invoke(app, ["secrets", "run", "--", "echo", "hi"])
+    assert result.exit_code == 7
+    assert ["varlock", "run", "--", "echo", "hi"] in patched_runner.calls
+
+
+def test_secrets_base_writes_schema(
+    patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(
+        "janitor.services.secrets.config_path", lambda: tmp_path / "janitor" / "config.toml"
+    )
+    result = runner.invoke(app, ["secrets", "base"])
+    assert result.exit_code == 0
+    assert (tmp_path / "janitor" / "varlock-base.env.schema").exists()

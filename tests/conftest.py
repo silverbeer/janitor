@@ -21,6 +21,8 @@ class FakeRunner(ShellRunner):
         self._stubs: list[tuple[tuple[str, ...], CommandResult]] = []
         self.calls: list[list[str]] = []
         self.envs: list[dict[str, str]] = []
+        #: Canned exit code returned by :meth:`exec_passthrough`.
+        self.exec_code: int = 0
 
     def stub(
         self,
@@ -59,6 +61,15 @@ class FakeRunner(ShellRunner):
             if tuple(cmd[: len(prefix)]) == prefix:
                 return result.model_copy(update={"command": cmd})
         return CommandResult(command=cmd, returncode=0, stdout="", stderr="")
+
+    def exec_passthrough(
+        self, command: Sequence[str], *, env: Mapping[str, str] | None = None
+    ) -> int:
+        cmd = list(command)
+        self.calls.append(cmd)
+        if env is not None:
+            self.envs.append(dict(env))
+        return self.exec_code
 
 
 @pytest.fixture

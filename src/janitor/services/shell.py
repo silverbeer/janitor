@@ -105,3 +105,21 @@ class ShellRunner:
         """Run ``command`` and return stripped stdout, or ``""`` on failure."""
         result = self.run(command, timeout=timeout)
         return result.stdout.strip() if result.ok else ""
+
+    def exec_passthrough(
+        self, command: Sequence[str], *, env: Mapping[str, str] | None = None
+    ) -> int:
+        """Run ``command`` inheriting the parent's stdio and return its exit code.
+
+        Unlike :meth:`run`, output is NOT captured — the child owns the terminal.
+        Use this to wrap interactive commands (e.g. a tool that prompts for
+        Touch ID). Honors dry-run by skipping execution and returning 0.
+        """
+        cmd = list(command)
+        if self.dry_run:
+            logger.info("dry_run.exec", command=cmd)
+            return 0
+        logger.debug("shell.exec", command=cmd)
+        child_env = {**os.environ, **env} if env else None
+        completed = subprocess.run(cmd, env=child_env, check=False)  # stdio inherited
+        return completed.returncode

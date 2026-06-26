@@ -23,6 +23,7 @@ homelab operators.
 | `jt brew`     | Outdated packages, upgrades, cleanup of old versions |
 | `jt logs`     | Find large logs, delete stale ones |
 | `jt supabase` | Discover local projects, show status, timestamped backups + retention/size hygiene |
+| `jt secrets`  | Shared Varlock + 1Password secret resolution (one schema convention across repos) |
 | `jt k3s`      | Cluster/node/pod health, clean up completed jobs |
 
 Every destructive command supports **`--dry-run`** (preview) and **`--yes`**
@@ -128,9 +129,16 @@ jt supabase backups             # list backups, sizes, flag retention/size breac
 jt supabase restore-from-prod my-project   # reset local + load prod data (destructive)
 jt supabase sync-users my-project          # prod auth users -> local with known passwords
 
+jt secrets base                 # write the shared base .env.schema (repos @import it)
+jt secrets run -- <command>     # run a command with env resolved from 1Password (via varlock)
+
 jt k3s status                   # nodes + pod health
 jt k3s cleanup                  # delete completed jobs
 ```
+
+> `jt secrets run` wraps [varlock](https://varlock.dev/) (`npm install -g varlock`)
+> to resolve secrets from 1Password locally. The cloud path is untouched — varlock
+> never runs in a container; k8s injects secrets as env vars as before.
 
 > `jt supabase sync-users` needs the Supabase Admin API client, which ships as
 > an optional extra to keep the core CLI lean:
