@@ -5,7 +5,7 @@ from __future__ import annotations
 import typer
 from rich.panel import Panel
 
-from janitor.commands import brew, disk, docker, k3s, logs, supabase
+from janitor.commands import brew, disk, docker, k3s, logs, secrets, supabase
 from janitor.commands.doctor import doctor as doctor_command
 from janitor.config import load_config
 from janitor.context import AppState
@@ -86,6 +86,7 @@ app.add_typer(disk.app, name="disk")
 app.add_typer(brew.app, name="brew")
 app.add_typer(logs.app, name="logs")
 app.add_typer(supabase.app, name="supabase")
+app.add_typer(secrets.app, name="secrets")
 app.add_typer(k3s.app, name="k3s")
 
 
