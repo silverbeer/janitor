@@ -52,13 +52,18 @@ BASE_SCHEMA = f"""\
 #
 # @currentEnv=$APP_ENV
 # @plugin(@varlock/1password-plugin@{ONE_PASSWORD_PLUGIN_VERSION})
-# @initOp(allowAppAuth=true)
+# @initOp(allowAppAuth=true, useCliWithServiceAccount=true)
 # ---
 # Environment flag: dev locally, prod in cloud (k8s sets APP_ENV, which wins by
-# process-env precedence). op() resolvers only matter locally.
-# @type=enum(dev, prod) @default=dev
-APP_ENV=
+# process-env precedence).
+# @type=enum(dev, prod)
+APP_ENV=dev
 """
+
+# NOTE: `useCliWithServiceAccount=true` makes the plugin resolve via the `op`
+# CLI (which authenticates through the unlocked desktop app) instead of the WASM
+# SDK, whose app-auth path fails with "Unable to authenticate with 1Password"
+# even when `op` itself works. Requires the 1Password CLI + desktop integration.
 
 
 class SecretsService:
