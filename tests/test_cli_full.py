@@ -402,3 +402,37 @@ def test_secrets_base_writes_schema(
     result = runner.invoke(app, ["secrets", "base"])
     assert result.exit_code == 0
     assert (tmp_path / "janitor" / "varlock-base.env.schema").exists()
+
+
+def test_secrets_init_scaffolds(
+    patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(
+        "janitor.services.secrets.config_path", lambda: tmp_path / "cfg" / "config.toml"
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    patched_runner.stub(["git"], returncode=1)  # .env.schema not ignored
+    result = runner.invoke(app, ["secrets", "init", "myapp", "--path", str(repo)])
+    assert result.exit_code == 0
+    assert (repo / ".env.schema").exists()
+
+
+def test_secrets_doctor_no_schema(patched_runner: FakeRunner, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    result = runner.invoke(app, ["secrets", "doctor", "--path", str(tmp_path)])
+    assert result.exit_code == 1
+
+
+def test_secrets_doctor_reports_parity(patched_runner: FakeRunner, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    (tmp_path / ".env.schema").write_text("STK_KEY=op(op://v/i/f)\n", encoding="utf-8")
+    helm = tmp_path / "helm"
+    helm.mkdir()
+    (helm / "d.yaml").write_text(
+        "        - name: SUPABASE_KEY\n          valueFrom:\n            secretKeyRef:\n"
+        "              name: app\n              key: k\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["secrets", "doctor", "--path", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "SUPABASE_KEY" in result.stdout
+    assert "in cloud but not in schema" in result.stdout

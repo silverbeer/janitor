@@ -14,6 +14,7 @@ __all__ = [
     "BrewStatus",
     "LogFile",
     "RestoreResult",
+    "SecretsParityReport",
     "SupabaseProject",
     "UserSyncResult",
 ]
@@ -112,6 +113,21 @@ class RestoreResult(BaseModel):
     dumped_bytes: int = 0
     loaded: bool = False
     dry_run: bool = False
+
+
+class SecretsParityReport(BaseModel):
+    """Name-parity between a repo's .env.schema and its cloud secret wiring."""
+
+    matched: list[str] = Field(default_factory=list)
+    #: Declared in .env.schema but not injected from a cloud secret (often config).
+    only_schema: list[str] = Field(default_factory=list)
+    #: Injected from a cloud secret but missing from .env.schema (real drift).
+    only_cloud: list[str] = Field(default_factory=list)
+
+    @property
+    def healthy(self) -> bool:
+        """True when every cloud-injected secret var is declared in the schema."""
+        return not self.only_cloud
 
 
 class AdminUser(BaseModel):
