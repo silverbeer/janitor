@@ -401,7 +401,7 @@ def test_secrets_base_writes_schema(
     )
     result = runner.invoke(app, ["secrets", "base"])
     assert result.exit_code == 0
-    assert (tmp_path / "janitor" / "varlock-base.env.schema").exists()
+    assert (tmp_path / "janitor" / "base" / ".env.schema").exists()
 
 
 def test_secrets_init_scaffolds(

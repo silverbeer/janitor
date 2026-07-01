@@ -37,7 +37,7 @@ BASE_SCHEMA = f"""\
 # Shared SB base env schema — managed by `jt secrets base`. DO NOT edit by hand.
 #
 # Each repo's .env.schema imports this and adds only its own variables:
-#   # @import(~/.config/janitor/varlock-base.env.schema)
+#   # @import(~/.config/janitor/base/.env.schema)
 #
 # 1Password layout (SB convention):
 #   - ONE "API Credential" item per app+env, titled "<app>-<env>" (e.g. stk-prod).
@@ -54,6 +54,10 @@ BASE_SCHEMA = f"""\
 # @plugin(@varlock/1password-plugin@{ONE_PASSWORD_PLUGIN_VERSION})
 # @initOp(allowAppAuth=true)
 # ---
+# Environment flag: dev locally, prod in cloud (k8s sets APP_ENV, which wins by
+# process-env precedence). op() resolvers only matter locally.
+# @type=enum(dev, prod) @default=dev
+APP_ENV=
 """
 
 
@@ -69,8 +73,12 @@ class SecretsService:
 
     @staticmethod
     def base_schema_path() -> Path:
-        """Stable path the shared base schema is written to (repos import this)."""
-        return config_path().parent / "varlock-base.env.schema"
+        """Stable path the shared base schema is written to (repos import this).
+
+        Named ``.env.schema`` in its own dir: varlock only imports files whose
+        name starts with ``.env`` and schema-parses ``.env.schema``.
+        """
+        return config_path().parent / "base" / ".env.schema"
 
     def write_base_schema(self) -> Path:
         """Write the shared base schema. Honors dry-run; returns its path."""
