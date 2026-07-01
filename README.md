@@ -144,7 +144,11 @@ jt k3s cleanup                  # delete completed jobs
 
 > `jt supabase sync-users` needs the Supabase Admin API client, which ships as
 > an optional extra to keep the core CLI lean:
-> `uv tool install --from git+https://github.com/silverbeer/janitor.git 'janitor-cli[supabase]'`
+> `uv tool install 'janitor-cli[supabase] @ git+https://github.com/silverbeer/janitor.git'`
+
+> **📖 Full walkthrough:** [docs/supabase-guide.md](./docs/supabase-guide.md) —
+> step-by-step setup on a new machine (config, secrets, backup → restore →
+> sync-users), with a copy-paste STK example and troubleshooting.
 
 ### Global flags
 

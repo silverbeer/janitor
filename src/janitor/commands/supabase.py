@@ -50,9 +50,7 @@ def backup(
     if not service.cli_available():
         err_console.print("[err]Supabase CLI is required for backups.[/]")
         raise typer.Exit(code=1)
-    projects = service.discover(state.config.supabase.search_paths)
-    if name:
-        projects = [p for p in projects if p.name == name]
+    projects = service.resolve_projects(state.config.supabase, name)
     if not projects:
         err_console.print("[err]No matching Supabase projects found.[/]")
         raise typer.Exit(code=1)
@@ -89,9 +87,7 @@ def backups(
     state: AppState = ctx.obj
     service = SupabaseService(runner=state.runner)
     sb = state.config.supabase
-    projects = service.discover(sb.search_paths)
-    if name:
-        projects = [p for p in projects if p.name == name]
+    projects = service.resolve_projects(sb, name)
     if not projects:
         console.print("[muted]No matching Supabase projects found.[/muted]")
         return
@@ -172,12 +168,12 @@ def restore_from_prod(
         )
         raise typer.Exit(code=1)
 
-    project = next(
-        (p for p in service.discover(sb.search_paths) if p.name == name),
-        None,
-    )
+    project = next(iter(service.resolve_projects(sb, name)), None)
     if project is None:
-        err_console.print(f"[err]Project '{name}' not found in search paths.[/]")
+        err_console.print(
+            f"[err]Project '{name}' not found[/] — set "
+            f"supabase.projects.{name}.path or place it under a search path."
+        )
         raise typer.Exit(code=1)
 
     prod_db_url = sb.resolved_prod_db_url(name)

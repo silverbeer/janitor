@@ -39,6 +39,7 @@ default = "fan123"
 # Secrets (prod DB URL, service-role keys) are referenced by env-var NAME and
 # read from the environment — never store the secret value in this file.
 # [supabase.projects.mt]
+# path = "~/gitrepos/missing-table"   # repo root; lets the config key resolve even if the folder name differs
 # backup_dir = "~/backups/mt"
 # retention_count = 3
 # max_dir_size_mb = 500
