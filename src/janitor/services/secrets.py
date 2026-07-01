@@ -37,17 +37,27 @@ BASE_SCHEMA = f"""\
 # Shared SB base env schema — managed by `jt secrets base`. DO NOT edit by hand.
 #
 # Each repo's .env.schema imports this and adds only its own variables:
-#   # @import(~/.config/janitor/varlock-base.env.schema)
+#   # @import(~/.config/janitor/base/.env.schema)
 #
-# Convention:
-#   - 1Password ref:  op://<vault>/<app>-<env>/<field>
-#   - env var names match the repo's Helm ExternalSecret keys (one contract)
+# 1Password layout (SB convention):
+#   - ONE "API Credential" item per app+env, titled "<app>-<env>" (e.g. stk-prod).
+#   - Each secret is its own concealed field: service_role_key, anon_key, url,
+#     db_url, jwt_secret, ...  (NOT a Secure Note — a blob can't be field-addressed.)
+#   - Reference a field: op://<vault>/<app>-<env>/<field>
+#     (in 1Password: the field -> down-arrow -> Copy Secret Reference.)
+#
+# Contract:
+#   - env var names match the repo's Helm ExternalSecret keys (local == cloud)
 #   - secret -> op() locally + AWS Secrets Manager in cloud; config -> plain value
 #
 # @currentEnv=$APP_ENV
 # @plugin(@varlock/1password-plugin@{ONE_PASSWORD_PLUGIN_VERSION})
 # @initOp(allowAppAuth=true)
 # ---
+# Environment flag: dev locally, prod in cloud (k8s sets APP_ENV, which wins by
+# process-env precedence). op() resolvers only matter locally.
+# @type=enum(dev, prod) @default=dev
+APP_ENV=
 """
 
 
@@ -63,8 +73,12 @@ class SecretsService:
 
     @staticmethod
     def base_schema_path() -> Path:
-        """Stable path the shared base schema is written to (repos import this)."""
-        return config_path().parent / "varlock-base.env.schema"
+        """Stable path the shared base schema is written to (repos import this).
+
+        Named ``.env.schema`` in its own dir: varlock only imports files whose
+        name starts with ``.env`` and schema-parses ``.env.schema``.
+        """
+        return config_path().parent / "base" / ".env.schema"
 
     def write_base_schema(self) -> Path:
         """Write the shared base schema. Honors dry-run; returns its path."""
@@ -92,10 +106,15 @@ class SecretsService:
             f"# @import({base_path})\n"
             "# ---\n"
             "# Declare this app's variables below. Secrets resolve from 1Password\n"
-            "# locally and from the platform (k8s/AWS) in cloud. Examples:\n"
+            "# locally and from the platform (k8s/AWS) in cloud.\n"
+            "#\n"
+            f"# 1Password: one 'API Credential' item titled '{app}-prod', one field\n"
+            "# per secret. Copy each ref via the field's 'Copy Secret Reference'.\n"
             "#\n"
             "# @required @sensitive\n"
-            f"# {prefix}_PROD_SERVICE_ROLE_KEY=op(op://<vault>/{app}-prod/service_role_key)\n"
+            f"# {prefix}_SERVICE_ROLE_KEY=op(op://<vault>/{app}-prod/service_role_key)\n"
+            "# @required @sensitive\n"
+            f"# {prefix}_DB_URL=op(op://<vault>/{app}-prod/db_url)\n"
             "# @required\n"
             "# LOG_LEVEL=INFO\n"
         )

@@ -53,7 +53,8 @@ def test_scaffold_schema_creates_with_import(tmp_path: Path, fake_runner: FakeRu
     assert status == "created"
     text = path.read_text(encoding="utf-8")
     assert "@import(" in text
-    assert "DEMO_APP_PROD_SERVICE_ROLE_KEY" in text  # prefix derived from app name
+    assert "DEMO_APP_SERVICE_ROLE_KEY" in text  # prefix derived from app name
+    assert "demo-app-prod/service_role_key" in text  # item-per-env convention
 
 
 def test_scaffold_schema_keeps_existing(tmp_path: Path, fake_runner: FakeRunner) -> None:
