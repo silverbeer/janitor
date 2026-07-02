@@ -32,3 +32,6 @@ coverage.xml
 
 # Janitor runtime
 .janitor/
+
+# Local janitor config (may hold dev passwords) — never commit
+config.toml

@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+from janitor.config import SupabaseConfig
 from janitor.logging import get_logger
 from janitor.models.system import (
     AdminUser,
@@ -92,6 +93,24 @@ class SupabaseService:
                     )
                 )
         return projects
+
+    def resolve_projects(
+        self, config: SupabaseConfig, name: str | None = None
+    ) -> list[SupabaseProject]:
+        """Resolve projects by config key (with explicit ``path``) + discovery.
+
+        Configured projects that declare a ``path`` are keyed by their config
+        name (e.g. ``stk``) and take precedence over auto-discovered ones (keyed
+        by directory name), so a project whose folder differs from its config
+        key still resolves. ``name`` filters to a single project.
+        """
+        merged: dict[str, SupabaseProject] = {p.name: p for p in self.discover(config.search_paths)}
+        for key, proj in config.projects.items():
+            if proj.path is not None:
+                merged[key] = SupabaseProject(path=proj.path.expanduser(), name=key)
+        if name is not None:
+            return [merged[name]] if name in merged else []
+        return list(merged.values())
 
     @staticmethod
     def _find_markers(base: Path, *, max_depth: int) -> list[Path]:

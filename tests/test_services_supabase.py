@@ -90,6 +90,31 @@ def test_list_backups_missing_dir(tmp_path: Path, fake_runner: FakeRunner) -> No
     assert SupabaseService(runner=fake_runner).list_backups("alpha", tmp_path / "nope") == []
 
 
+def test_resolve_projects_config_key_overrides_dirname(
+    tmp_path: Path, fake_runner: FakeRunner
+) -> None:
+    from janitor.config import SupabaseConfig, SupabaseProjectConfig
+
+    # Discovered by directory name "myrunstreak.run"...
+    repo = _make_project(tmp_path, "myrunstreak.run")
+    # ...but configured under the key "stk" with an explicit path.
+    config = SupabaseConfig(
+        search_paths=[tmp_path],
+        projects={"stk": SupabaseProjectConfig(path=repo)},
+    )
+    service = SupabaseService(runner=fake_runner)
+    # The config key resolves to the configured path.
+    stk = service.resolve_projects(config, "stk")
+    assert len(stk) == 1
+    assert stk[0].name == "stk"
+    assert stk[0].path == repo
+    # Both the discovered dir name and the config key are present when listing.
+    names = {p.name for p in service.resolve_projects(config)}
+    assert {"stk", "myrunstreak.run"} <= names
+    # Unknown name resolves to nothing.
+    assert service.resolve_projects(config, "nope") == []
+
+
 def test_report_flags_over_size_and_count(tmp_path: Path, fake_runner: FakeRunner) -> None:
     backup_dir = tmp_path / "backups"
     for i in range(4):
