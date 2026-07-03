@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shlex
+
 import typer
 from rich.table import Table
 
@@ -219,6 +221,20 @@ def restore_from_prod(
             f"[ok]Restored {name}[/] — reset local, loaded "
             f"{format_bytes(result.dumped_bytes)} of prod data."
         )
+
+    # Post-restore hook: reseed local dev users (etc.) so the DB is usable in one
+    # step. Runs in the project path via a login shell; stdio is inherited so the
+    # hook's own progress/prompts (e.g. Touch ID) work.
+    post_cmd = project_cfg.post_restore_cmd
+    if post_cmd and not result.dry_run:
+        console.print("[info]Running post-restore hook…[/]")
+        code = state.runner.exec_passthrough(
+            ["bash", "-lc", f"cd {shlex.quote(str(project.path))} && {post_cmd}"]
+        )
+        if code != 0:
+            err_console.print(f"[err]Post-restore hook failed (exit {code}).[/]")
+            raise typer.Exit(code=1)
+        console.print("[ok]Post-restore hook complete.[/]")
 
 
 @app.command(name="sync-users")
