@@ -162,6 +162,13 @@ class SupabaseProjectConfig(BaseModel):
         default_factory=dict,
         description="email -> local password. The keys are the default sync target list.",
     )
+    post_restore_cmd: str | None = Field(
+        default=None,
+        description=(
+            "Shell command run (via bash -lc) in the project path after a successful "
+            "restore-from-prod — e.g. reseed local dev users so the DB is usable in one step."
+        ),
+    )
 
 
 class SupabaseConfig(BaseModel):
