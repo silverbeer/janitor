@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from janitor.services.secrets import ONE_PASSWORD_PLUGIN_VERSION, SecretsService
 from tests.conftest import FakeRunner
 
@@ -129,3 +131,90 @@ def test_parity_flags_only_cloud(fake_runner: FakeRunner) -> None:
     assert report.only_schema == ["LOG_LEVEL"]
     assert report.only_cloud == ["SECRET_B"]
     assert report.healthy is False  # SECRET_B in cloud but not schema
+
+
+# ---- pull ------------------------------------------------------------------
+
+
+def test_op_available(fake_runner: FakeRunner, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr("janitor.services.secrets.which", lambda _: "/usr/bin/op")
+    assert SecretsService(runner=fake_runner).op_available() is True
+    monkeypatch.setattr("janitor.services.secrets.which", lambda _: None)
+    assert SecretsService(runner=fake_runner).op_available() is False
+
+
+def test_read_op_ref_returns_value(fake_runner: FakeRunner) -> None:
+    fake_runner.stub(["op", "read"], stdout="s3cr3t\n")
+    assert SecretsService(runner=fake_runner).read_op_ref("op://v/i/f") == "s3cr3t"
+
+
+def test_read_op_ref_raises_on_failure(fake_runner: FakeRunner) -> None:
+    fake_runner.stub(["op", "read"], returncode=1, stderr="not signed in")
+    with pytest.raises(RuntimeError, match="not signed in"):
+        SecretsService(runner=fake_runner).read_op_ref("op://v/i/f")
+
+
+def test_pull_writes_env_file_chmod_600(tmp_path: Path, fake_runner: FakeRunner) -> None:
+    fake_runner.stub(["op", "read", "op://V/stk-prod/db_url"], stdout="postgres://u:p@h/db")
+    fake_runner.stub(["op", "read", "op://V/stk-prod/service_role_key"], stdout="eyJkey")
+    env_file = tmp_path / "stk.env"
+    report = SecretsService(runner=fake_runner).pull(
+        [
+            ("STK_PROD_DATABASE_URL", "op://V/stk-prod/db_url"),
+            ("STK_PROD_SERVICE_ROLE_KEY", "op://V/stk-prod/service_role_key"),
+        ],
+        env_file,
+        local_key_env="STK_LOCAL_SERVICE_ROLE_KEY",
+    )
+    assert report.written == ["STK_PROD_DATABASE_URL", "STK_PROD_SERVICE_ROLE_KEY"]
+    text = env_file.read_text(encoding="utf-8")
+    assert "export STK_PROD_DATABASE_URL='postgres://u:p@h/db'" in text
+    assert "export STK_PROD_SERVICE_ROLE_KEY='eyJkey'" in text
+    # local key noted as manual, not resolved from op
+    assert "STK_LOCAL_SERVICE_ROLE_KEY" in text
+    assert "supabase status" in text
+    assert (env_file.stat().st_mode & 0o777) == 0o600
+
+
+def test_pull_quotes_values_with_single_quotes(tmp_path: Path, fake_runner: FakeRunner) -> None:
+    fake_runner.stub(["op", "read"], stdout="pa'ss")
+    env_file = tmp_path / "x.env"
+    SecretsService(runner=fake_runner).pull([("SECRET", "op://v/i/f")], env_file)
+    # embedded single quote is shell-escaped so `source` stays safe
+    assert "export SECRET='pa'\"'\"'ss'" in env_file.read_text(encoding="utf-8")
+
+
+def test_pull_dry_run_writes_nothing(tmp_path: Path, make_runner) -> None:  # type: ignore[no-untyped-def]
+    env_file = tmp_path / "stk.env"
+    report = SecretsService(runner=make_runner(dry_run=True)).pull(
+        [("STK_PROD_DATABASE_URL", "op://V/stk-prod/db_url")], env_file
+    )
+    assert report.dry_run is True
+    assert not env_file.exists()
+
+
+def test_pull_preserves_existing_local_key(tmp_path: Path, fake_runner: FakeRunner) -> None:
+    fake_runner.stub(["op", "read"], stdout="val")
+    env_file = tmp_path / "stk.env"
+    env_file.write_text("export STK_LOCAL_SERVICE_ROLE_KEY='localkey123'\n", encoding="utf-8")
+    SecretsService(runner=fake_runner).pull(
+        [("STK_PROD_DATABASE_URL", "op://V/i/db_url")],
+        env_file,
+        local_key_env="STK_LOCAL_SERVICE_ROLE_KEY",
+    )
+    text = env_file.read_text(encoding="utf-8")
+    assert "export STK_LOCAL_SERVICE_ROLE_KEY='localkey123'" in text  # preserved, not clobbered
+
+
+def test_pull_ignores_placeholder_local_key(tmp_path: Path, fake_runner: FakeRunner) -> None:
+    fake_runner.stub(["op", "read"], stdout="val")
+    env_file = tmp_path / "stk.env"
+    env_file.write_text("export STK_LOCAL_SERVICE_ROLE_KEY='REPLACE_ME_local'\n", encoding="utf-8")
+    SecretsService(runner=fake_runner).pull(
+        [("STK_PROD_DATABASE_URL", "op://V/i/db_url")],
+        env_file,
+        local_key_env="STK_LOCAL_SERVICE_ROLE_KEY",
+    )
+    text = env_file.read_text(encoding="utf-8")
+    assert "REPLACE_ME_local" not in text  # placeholder dropped
+    assert "supabase status" in text  # replaced by the manual-setup note

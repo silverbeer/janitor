@@ -132,6 +132,7 @@ jt supabase sync-users my-project          # prod auth users -> local with known
 jt secrets base                 # write the shared base .env.schema (repos @import it)
 jt secrets init [app]           # scaffold a repo .env.schema importing the base (+ gitignore fix)
 jt secrets doctor               # lint name parity: .env.schema ↔ Helm secretKeyRef vars
+jt secrets pull <project>       # materialize a project's prod secrets from 1Password -> env file (chmod 600)
 jt secrets run -- <command>     # run a command with env resolved from 1Password (via varlock)
 
 jt k3s status                   # nodes + pod health

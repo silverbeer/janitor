@@ -93,6 +93,54 @@ def test_supabase_resolved_prod_db_url(tmp_path: Path, monkeypatch: pytest.Monke
     assert sb.resolved_prod_db_url("other") is None
 
 
+def test_supabase_op_secret_refs(tmp_path: Path) -> None:
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        "[supabase.projects.stk]\n"
+        "secrets_vault = 'Private'\n"
+        "secrets_item = 'stk-prod'\n"
+        "prod_db_url_env = 'STK_PROD_DATABASE_URL'\n"
+        "prod_service_key_env = 'STK_PROD_SERVICE_ROLE_KEY'\n",
+        encoding="utf-8",
+    )
+    sb = load_config(cfg).supabase
+    assert sb.op_secret_refs("stk") == [
+        ("STK_PROD_DATABASE_URL", "op://Private/stk-prod/db_url"),
+        ("STK_PROD_SERVICE_ROLE_KEY", "op://Private/stk-prod/service_role_key"),
+    ]
+
+
+def test_supabase_op_secret_refs_requires_vault_and_item(tmp_path: Path) -> None:
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        # item set but vault missing -> no refs
+        "[supabase.projects.stk]\n"
+        "secrets_item = 'stk-prod'\n"
+        "prod_db_url_env = 'STK_PROD_DATABASE_URL'\n",
+        encoding="utf-8",
+    )
+    sb = load_config(cfg).supabase
+    assert sb.op_secret_refs("stk") == []
+    assert sb.op_secret_refs("unknown") == []
+
+
+def test_supabase_resolved_secrets_env_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", "/tmp/xdg")
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        "[supabase.projects.stk]\nsecrets_item = 'stk-prod'\n"
+        "[supabase.projects.mt]\nsecrets_env_file = '~/custom/mt.env'\n",
+        encoding="utf-8",
+    )
+    sb = load_config(cfg).supabase
+    # default: alongside the config file, named <project>.env
+    assert sb.resolved_secrets_env_file("stk") == Path("/tmp/xdg/janitor/stk.env")
+    # explicit override, expanduser applied
+    assert sb.resolved_secrets_env_file("mt") == Path.home() / "custom" / "mt.env"
+
+
 def test_supabase_resolved_password(tmp_path: Path) -> None:
     cfg = tmp_path / "config.toml"
     cfg.write_text(

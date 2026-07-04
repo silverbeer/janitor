@@ -13,7 +13,7 @@ from pathlib import Path
 
 from janitor.config import config_path
 from janitor.logging import get_logger
-from janitor.models.system import SecretsParityReport
+from janitor.models.system import SecretsParityReport, SecretsPullReport
 from janitor.services.shell import ShellRunner, which
 
 __all__ = ["ONE_PASSWORD_PLUGIN_VERSION", "SecretsService"]
@@ -99,6 +99,96 @@ class SecretsService:
     def run(self, command: list[str]) -> int:
         """Run ``command`` under ``varlock run`` (interactive). Returns exit code."""
         return self.runner.exec_passthrough(["varlock", "run", "--", *command])
+
+    # ---- pull (materialize an env file from 1Password) ----------------------
+
+    def op_available(self) -> bool:
+        """True when the 1Password CLI (``op``) is installed."""
+        return which("op") is not None
+
+    def read_op_ref(self, ref: str) -> str:
+        """Resolve a single ``op://…`` reference to its secret value.
+
+        Raises :class:`RuntimeError` with a clean message when ``op read`` fails
+        (not signed in, item or field missing, etc.).
+        """
+        result = self.runner.run(["op", "read", ref], timeout=30)
+        if not result.ok:
+            raise RuntimeError(result.stderr.strip() or f"op read failed for {ref}")
+        return result.stdout.strip()
+
+    def pull(
+        self,
+        refs: list[tuple[str, str]],
+        env_file: Path,
+        *,
+        local_key_env: str | None = None,
+    ) -> SecretsPullReport:
+        """Resolve ``refs`` from 1Password and write them to ``env_file`` (chmod 600).
+
+        ``refs`` is a list of ``(env_var_name, op://ref)``. Honors dry-run
+        (resolves nothing, writes nothing). Any existing real value for
+        ``local_key_env`` already in the file is preserved.
+        """
+        env_file = env_file.expanduser()
+        written = [name for name, _ in refs]
+        if self.runner.dry_run:
+            logger.info("secrets.pull.dry_run", env_file=str(env_file), vars=written)
+            return SecretsPullReport(
+                env_file=env_file, written=written, local_key_env=local_key_env, dry_run=True
+            )
+        resolved = [(name, self.read_op_ref(ref)) for name, ref in refs]
+        preserved_local = self._existing_export(env_file, local_key_env) if local_key_env else None
+        env_file.parent.mkdir(parents=True, exist_ok=True)
+        env_file.write_text(
+            self._render_env_file(resolved, local_key_env, preserved_local), encoding="utf-8"
+        )
+        env_file.chmod(0o600)
+        logger.info("secrets.pull.write", env_file=str(env_file), vars=written)
+        return SecretsPullReport(
+            env_file=env_file, written=written, local_key_env=local_key_env, dry_run=False
+        )
+
+    @staticmethod
+    def _shquote(value: str) -> str:
+        """Single-quote ``value`` for safe ``source``-ing in bash."""
+        return "'" + value.replace("'", "'\"'\"'") + "'"
+
+    @staticmethod
+    def _existing_export(env_file: Path, var: str) -> str | None:
+        """Return an existing real (non-placeholder) export value for ``var``, if any."""
+        if not env_file.is_file():
+            return None
+        pattern = re.compile(rf"^\s*export\s+{re.escape(var)}=(.*)$")
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            match = pattern.match(line)
+            if match:
+                raw = match.group(1).strip().strip("'\"")
+                if raw and not raw.startswith("REPLACE_ME"):
+                    return raw
+        return None
+
+    def _render_env_file(
+        self,
+        resolved: list[tuple[str, str]],
+        local_key_env: str | None,
+        preserved_local: str | None,
+    ) -> str:
+        lines = [
+            "# Managed by `jt secrets pull` — chmod 600, do NOT commit.",
+            "# Source before jt supabase commands:  source this file",
+            "",
+        ]
+        lines.extend(f"export {name}={self._shquote(value)}" for name, value in resolved)
+        if local_key_env:
+            if preserved_local:
+                lines.append(f"export {local_key_env}={self._shquote(preserved_local)}")
+            else:
+                lines.append(
+                    f"# {local_key_env} — local service-role key from `supabase status` "
+                    "(not in 1Password); set it manually."
+                )
+        return "\n".join(lines) + "\n"
 
     # ---- init ---------------------------------------------------------------
 

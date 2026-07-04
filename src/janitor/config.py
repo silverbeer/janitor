@@ -170,6 +170,26 @@ class SupabaseProjectConfig(BaseModel):
         ),
     )
 
+    # ---- jt secrets pull (1Password materialization) ----
+    secrets_vault: str | None = Field(
+        default=None,
+        description="1Password vault holding this project's secrets item (for `jt secrets pull`).",
+    )
+    secrets_item: str | None = Field(
+        default=None,
+        description=(
+            "1Password item title, e.g. 'stk-prod'. Secret fields are addressed as "
+            "op://<secrets_vault>/<secrets_item>/<field> per the field-per-secret convention."
+        ),
+    )
+    secrets_env_file: Path | None = Field(
+        default=None,
+        description=(
+            "Where `jt secrets pull` writes resolved secrets "
+            "(default ~/.config/janitor/<project>.env)."
+        ),
+    )
+
 
 class SupabaseConfig(BaseModel):
     """Supabase project discovery, backup, and retention defaults."""
@@ -244,6 +264,34 @@ class SupabaseConfig(BaseModel):
         if not env_name:
             return None
         return os.environ.get(env_name) or None
+
+    def op_secret_refs(self, name: str) -> list[tuple[str, str]]:
+        """Return ``(env_var_name, op://…ref)`` pairs to materialize for ``name``.
+
+        Uses the field-per-secret convention: the prod DB URL and prod
+        service-role key resolve from the project's 1Password item
+        (``op://<secrets_vault>/<secrets_item>/<field>``). Requires both
+        ``secrets_vault`` and ``secrets_item``; returns ``[]`` otherwise. The
+        local service-role key is intentionally excluded — it comes from
+        ``supabase status``, not 1Password.
+        """
+        proj = self.project(name)
+        if not proj.secrets_vault or not proj.secrets_item:
+            return []
+        base = f"op://{proj.secrets_vault}/{proj.secrets_item}"
+        refs: list[tuple[str, str]] = []
+        if proj.prod_db_url_env:
+            refs.append((proj.prod_db_url_env, f"{base}/db_url"))
+        if proj.prod_service_key_env:
+            refs.append((proj.prod_service_key_env, f"{base}/service_role_key"))
+        return refs
+
+    def resolved_secrets_env_file(self, name: str) -> Path:
+        """Path ``jt secrets pull`` writes to (default ~/.config/janitor/<name>.env)."""
+        override = self.project(name).secrets_env_file
+        if override is not None:
+            return override.expanduser()
+        return config_path().parent / f"{name}.env"
 
     def sync_targets(self, name: str) -> list[str]:
         """Default sync list = the emails named in the project's user_passwords."""
