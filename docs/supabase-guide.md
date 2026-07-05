@@ -132,6 +132,32 @@ source ~/.config/janitor/stk.env       # before running jt supabase commands
 > The local service-role key comes from `supabase status` (run in the repo) — the
 > `service_role key` line.
 
+### Or: populate the file from 1Password with `jt secrets pull`
+
+If your prod secrets live in a 1Password item (SB convention: one item `stk-prod`,
+a field per secret — `db_url`, `service_role_key`), let `jt` write the env file for
+you instead of copy-pasting. Add to the project's config block:
+
+```toml
+[supabase.projects.stk]
+secrets_vault = "Private"     # your 1Password vault
+secrets_item  = "stk-prod"    # item title; fields addressed as op://Private/stk-prod/<field>
+```
+
+Then:
+
+```bash
+jt secrets pull stk           # op read -> ~/.config/janitor/stk.env (chmod 600)
+source ~/.config/janitor/stk.env
+```
+
+It resolves `prod_db_url_env` from `op://<vault>/<item>/db_url` and
+`prod_service_key_env` from `.../service_role_key`, writes them shell-quoted, and
+preserves any real `STK_LOCAL_SERVICE_ROLE_KEY` you already set (the local key isn't
+in 1Password — it comes from `supabase status`). Requires the 1Password CLI (`op`)
+installed and its desktop-app integration unlocked. `jt --dry-run secrets pull stk`
+previews without reading any secret.
+
 ---
 
 ## 6. Run the commands

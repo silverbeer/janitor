@@ -52,6 +52,12 @@ default = "fan123"
 # prod_api_url = "https://<ref>.supabase.co"
 # prod_service_key_env = "MT_PROD_SERVICE_ROLE_KEY"   # NAME of env var (secret)
 # local_service_key_env = "MT_LOCAL_SERVICE_ROLE_KEY" # NAME of env var (secret)
+# # jt secrets pull: resolve the prod secrets above from 1Password into an env
+# # file (chmod 600) you can `source`. Maps prod_db_url_env -> op://.../db_url and
+# # prod_service_key_env -> op://.../service_role_key (field-per-secret convention).
+# secrets_vault = "Private"            # 1Password vault
+# secrets_item = "mt-prod"             # item title; fields addressed under it
+# secrets_env_file = "~/.config/janitor/mt.env"  # default: <config-dir>/<project>.env
 #
 # A tiny project (e.g. STK, one user): the user_passwords keys ARE the sync
 # list, so `jt supabase sync-users stk` syncs exactly these users.

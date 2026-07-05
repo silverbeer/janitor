@@ -51,6 +51,58 @@ def run(ctx: typer.Context) -> None:
 
 
 @app.command()
+def pull(
+    ctx: typer.Context,
+    project: str = typer.Argument(..., help="Project key (e.g. 'stk')."),
+) -> None:
+    """Materialize a project's secrets env file from 1Password (``op``).
+
+    Resolves the prod DB URL + service-role key from the project's 1Password
+    item and writes them to ~/.config/janitor/<project>.env (chmod 600), ready
+    to ``source`` before jt supabase commands. The local service-role key is
+    left for ``supabase status`` — it is not stored in 1Password.
+    """
+    state: AppState = ctx.obj
+    service = SecretsService(runner=state.runner)
+    if not service.op_available():
+        err_console.print(
+            "[err]1Password CLI (op) not found.[/] Install it:\n"
+            "  [bold]brew install 1password-cli[/]  (then enable desktop app integration)"
+        )
+        raise typer.Exit(code=1)
+
+    supa = state.config.supabase
+    refs = supa.op_secret_refs(project)
+    if not refs:
+        err_console.print(
+            f"[err]No 1Password secret refs for '{project}'.[/] Set [bold]secrets_vault[/] + "
+            "[bold]secrets_item[/] (and prod_db_url_env / prod_service_key_env) in its "
+            "config block."
+        )
+        raise typer.Exit(code=1)
+
+    env_file = supa.resolved_secrets_env_file(project)
+    local_key_env = supa.project(project).local_service_key_env
+    try:
+        report = service.pull(refs, env_file, local_key_env=local_key_env)
+    except RuntimeError as exc:
+        err_console.print(f"[err]op read failed:[/] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    verb = "Would write" if report.dry_run else "Wrote"
+    console.print(f"[ok]{verb}[/] {report.env_file} [muted](chmod 600)[/]")
+    for name in report.written:
+        console.print(f"  [ok]✓[/] {name}")
+    if report.local_key_env:
+        console.print(
+            f"  [muted]○ {report.local_key_env} — set from[/] supabase status "
+            "[muted](not in 1Password)[/]"
+        )
+    if not report.dry_run:
+        console.print(f"[muted]Next:[/] source {report.env_file}")
+
+
+@app.command()
 def init(
     ctx: typer.Context,
     app_name: str = typer.Argument(None, help="App name (defaults to the directory name)."),

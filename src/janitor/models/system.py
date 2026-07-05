@@ -15,6 +15,7 @@ __all__ = [
     "LogFile",
     "RestoreResult",
     "SecretsParityReport",
+    "SecretsPullReport",
     "SupabaseProject",
     "UserSyncResult",
 ]
@@ -128,6 +129,17 @@ class SecretsParityReport(BaseModel):
     def healthy(self) -> bool:
         """True when every cloud-injected secret var is declared in the schema."""
         return not self.only_cloud
+
+
+class SecretsPullReport(BaseModel):
+    """Outcome of ``jt secrets pull`` materializing an env file from 1Password."""
+
+    env_file: Path
+    #: Env var names successfully resolved from 1Password and written.
+    written: list[str] = Field(default_factory=list)
+    #: Env var name for the local service-role key — noted, not sourced from op.
+    local_key_env: str | None = None
+    dry_run: bool = False
 
 
 class AdminUser(BaseModel):
