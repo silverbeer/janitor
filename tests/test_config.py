@@ -53,6 +53,33 @@ def test_load_missing_file_returns_defaults(tmp_path: Path) -> None:
     assert config.disk.top_n == 20
 
 
+def test_tilde_paths_expanded_on_load(tmp_path: Path) -> None:
+    # Regression: `~` in path fields must expand at load time. Otherwise
+    # Path("~/gitrepos").is_dir() is always False and discovery/scans silently
+    # find nothing.
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        "[disk]\nscan_paths = ['~/code']\n"
+        "[logs]\npaths = ['~/Library/Logs']\n"
+        "[supabase]\nsearch_paths = ['~/gitrepos']\nbackup_dir = '~/backups'\n"
+        "[supabase.projects.stk]\npath = '~/gitrepos/myrunstreak.run'\n"
+        "secrets_env_file = '~/.config/janitor/stk.env'\n",
+        encoding="utf-8",
+    )
+    config = load_config(cfg)
+    home = Path.home()
+    assert config.disk.scan_paths == [home / "code"]
+    assert config.logs.paths == [home / "Library" / "Logs"]
+    assert config.supabase.search_paths == [home / "gitrepos"]
+    assert config.supabase.backup_dir == home / "backups"
+    assert config.supabase.project("stk").path == home / "gitrepos" / "myrunstreak.run"
+    assert (
+        config.supabase.project("stk").secrets_env_file == home / ".config" / "janitor" / "stk.env"
+    )
+    # no literal "~" survives anywhere
+    assert not any("~" in str(p) for p in config.supabase.search_paths)
+
+
 def test_supabase_retention_defaults() -> None:
     sb = JanitorConfig().supabase
     assert sb.resolved_retention("anything") == (5, 0, 2000)

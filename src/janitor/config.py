@@ -14,14 +14,20 @@ import os
 import tomllib
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
 )
+
+#: A ``Path`` that expands a leading ``~`` at validation time. Config path fields
+#: use this so ``"~/gitrepos"`` becomes an absolute path on load — otherwise
+#: ``Path("~/gitrepos").is_dir()`` is always False (only ``expanduser()`` expands
+#: ``~``) and downstream scans/discovery silently find nothing.
+ExpandedPath = Annotated[Path, AfterValidator(lambda p: p.expanduser())]
 
 __all__ = [
     "DiskConfig",
@@ -65,7 +71,7 @@ class DockerConfig(BaseModel):
 class DiskConfig(BaseModel):
     """Disk scanning defaults."""
 
-    scan_paths: list[Path] = Field(
+    scan_paths: list[ExpandedPath] = Field(
         default_factory=lambda: [Path.home()],
         description="Roots scanned for largest files and directories.",
     )
@@ -80,7 +86,7 @@ class DiskConfig(BaseModel):
 class LogsConfig(BaseModel):
     """Log discovery and rotation defaults."""
 
-    paths: list[Path] = Field(
+    paths: list[ExpandedPath] = Field(
         default_factory=lambda: [Path("/var/log"), Path.home() / "Library" / "Logs"],
         description="Directories scanned for log files.",
     )
@@ -99,7 +105,7 @@ class SupabaseProjectConfig(BaseModel):
     :class:`SupabaseConfig` defaults, so a project only declares what differs.
     """
 
-    backup_dir: Path | None = Field(
+    backup_dir: ExpandedPath | None = Field(
         default=None,
         description="Override the shared backup dir for this project.",
     )
@@ -120,7 +126,7 @@ class SupabaseProjectConfig(BaseModel):
     )
 
     # ---- restore-from-prod ----
-    path: Path | None = Field(
+    path: ExpandedPath | None = Field(
         default=None,
         description="Project root (holds supabase/). Defaults to the discovered path.",
     )
@@ -182,7 +188,7 @@ class SupabaseProjectConfig(BaseModel):
             "op://<secrets_vault>/<secrets_item>/<field> per the field-per-secret convention."
         ),
     )
-    secrets_env_file: Path | None = Field(
+    secrets_env_file: ExpandedPath | None = Field(
         default=None,
         description=(
             "Where `jt secrets pull` writes resolved secrets "
@@ -194,11 +200,11 @@ class SupabaseProjectConfig(BaseModel):
 class SupabaseConfig(BaseModel):
     """Supabase project discovery, backup, and retention defaults."""
 
-    search_paths: list[Path] = Field(
+    search_paths: list[ExpandedPath] = Field(
         default_factory=lambda: [Path.home() / "gitrepos", Path.home() / "projects"],
         description="Directories scanned for Supabase projects.",
     )
-    backup_dir: Path = Field(
+    backup_dir: ExpandedPath = Field(
         default_factory=lambda: Path.home() / ".janitor" / "backups" / "supabase",
         description="Destination for timestamped backups.",
     )
