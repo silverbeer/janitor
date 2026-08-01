@@ -234,6 +234,33 @@ def test_restore_runs_reset_dump_load(tmp_path: Path, fake_runner: FakeRunner) -
     assert {"PGPASSWORD": "localpw"} in fake_runner.envs
 
 
+def test_restore_suppresses_fks_without_superuser(tmp_path: Path, fake_runner: FakeRunner) -> None:
+    """FKs are suppressed by session_replication_role, not --disable-triggers.
+
+    ``--disable-triggers`` makes pg_dump emit ``ALTER TABLE .. DISABLE TRIGGER
+    ALL``; an FK's RI trigger is a system trigger, so that needs true superuser.
+    Supabase's ``postgres`` role has ``rolsuper = f``, so the load died with
+    "permission denied: ... is a system trigger" (SB-517).
+    """
+    SupabaseService(runner=fake_runner).restore_from_prod(
+        "alpha",
+        tmp_path,
+        local_db_url=_LOCAL_URL,
+        prod_db_url=_PROD_URL,
+        data_schemas=["public"],
+    )
+    dump_cmd = next(c for c in fake_runner.calls if c[0] == "pg_dump")
+    assert "--disable-triggers" not in dump_cmd
+
+    load_cmd = next(c for c in fake_runner.calls if c[0] == "psql")
+    assert "SET session_replication_role = 'replica'" in load_cmd
+    # It must precede the dump, or the rows load with FKs still armed.
+    assert load_cmd.index("--command") < load_cmd.index("--file")
+    # Still one transaction that aborts on the first error.
+    assert "--single-transaction" in load_cmd
+    assert "ON_ERROR_STOP=on" in load_cmd
+
+
 # ---- sync-users ------------------------------------------------------------
 
 

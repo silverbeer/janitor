@@ -278,6 +278,14 @@ class SupabaseService:
         dump is data-only and deleted after load (it may hold PII). Passwords
         travel via ``PGPASSWORD``, never the argument vector.
 
+        Foreign keys are suppressed for the load with
+        ``session_replication_role = replica`` rather than pg_dump's
+        ``--disable-triggers``. The latter emits ``ALTER TABLE .. DISABLE
+        TRIGGER ALL``, and an FK's RI trigger is a *system* trigger, so altering
+        it needs true superuser — which Supabase's ``postgres`` role is not
+        (``rolsuper = f``). The session setting reaches the same end without
+        touching trigger objects, and expires with the connection.
+
         Raises:
             ValueError: if ``local_db_url`` does not point at a loopback host.
         """
@@ -308,7 +316,6 @@ class SupabaseService:
             [
                 "pg_dump",
                 "--data-only",
-                "--disable-triggers",
                 "--no-owner",
                 "--no-acl",
                 *schema_args,
@@ -332,6 +339,11 @@ class SupabaseService:
                     "ON_ERROR_STOP=on",
                     "--dbname",
                     local_uri,
+                    # psql runs --command / --file in the order given, and
+                    # --single-transaction wraps them, so this holds for the
+                    # whole load.
+                    "--command",
+                    "SET session_replication_role = 'replica'",
                     "--file",
                     str(dump_path),
                 ],

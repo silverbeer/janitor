@@ -315,6 +315,7 @@ jt --yes supabase backup stk                  # skip confirmation (automation)
 | `Missing config for user sync` | Add `prod_api_url` + the `*_service_key_env` vars; the message lists exactly what's absent |
 | `No prod DB URL for 'stk'` | Set `prod_db_url_env` in config and `export` that variable |
 | `No route to host` / connection times out | You are using the direct `db.<ref>.supabase.co` host, which is IPv6-only. Switch to the pooler URL (§5) |
+| `permission denied: "RI_ConstraintTrigger_…" is a system trigger` | Fixed in SB-517. Your `jt` predates it — reinstall (§3). The load no longer uses `--disable-triggers`, which needs a superuser Supabase does not give you |
 | Pooler rejects the tenant | Username must be `postgres.<ref>`, not `postgres`. Still failing? Use the REST fallback (§5) |
 | `No Supabase projects found in configured search paths` | `~` in `search_paths` is expanded as of #14 — if you still see this, your `jt` predates it. Reinstall with `--no-cache` (§3) |
 | Restore runs but login fails | Run `sync-users` after `restore-from-prod` — restore loads data, sync creates the auth login. Or set `post_restore_cmd` (§4) so it happens automatically |
