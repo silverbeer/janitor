@@ -18,13 +18,23 @@ All four gates run in CI and must pass before merge.
 ## Installing the CLI you are editing
 
 ```bash
-uv tool install --force --reinstall --no-cache ~/gitrepos/janitor
+cd ~/gitrepos/janitor
+uv tool install --force --reinstall --no-cache "janitor-cli[supabase] @ file://$PWD"
 ```
 
-**`--no-cache` is not optional.** Without it uv reinstalls from a cached build
-and silently keeps serving old code — the symptom is `jt` printing error text
-that no longer exists in the source. Before debugging "my fix did nothing",
-confirm what is actually installed:
+**Both details matter, and both fail silently.**
+
+`--no-cache` is not optional. Without it uv reinstalls from a cached build and
+keeps serving old code — the symptom is `jt` printing error text that no longer
+exists in the source.
+
+**`[supabase]` is not optional either.** A bare path argument installs base
+dependencies only, and `--force --reinstall` makes that a *downgrade* of a
+working install: the extra is removed without a word, and the next
+`jt supabase sync-users` dies with `ModuleNotFoundError: No module named
+'supabase'`. Keep the extra on every reinstall.
+
+Before debugging "my fix did nothing", confirm what is actually installed:
 
 ```bash
 grep -rn "<a string you just added>" \
@@ -76,8 +86,8 @@ stale. Both happened on 2026-08-01: a checkout two commits behind `origin/main`
 produced a "bug report" for something already fixed in #14.
 
 ```bash
-git -C ~/gitrepos/janitor fetch origin && git -C ~/gitrepos/janitor status -sb
-uv tool install --force --reinstall --no-cache ~/gitrepos/janitor
+cd ~/gitrepos/janitor && git fetch origin && git status -sb
+uv tool install --force --reinstall --no-cache "janitor-cli[supabase] @ file://$PWD"
 ```
 
 Verify the source before diagnosing the behaviour.
