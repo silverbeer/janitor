@@ -51,6 +51,31 @@ def _is_local_url(url: str) -> bool:
     return urlsplit(url).hostname in _LOCAL_HOSTS
 
 
+def _truncate_schemas_sql(schemas: list[str]) -> str:
+    """SQL emptying every table in ``schemas``, for a data-only load.
+
+    A ``--data-only`` dump assumes it is loading into empty tables. Migrations
+    can leave fixture rows behind — STK's initial schema inserts a test user
+    with a fixed UUID — and those collide with the same primary key in the dump
+    (SB-519). Rather than reason about which mechanism inserted what, start from
+    empty.
+
+    One multi-table ``TRUNCATE`` rather than a loop: truncating a set of tables
+    in a single statement is permitted even when they reference each other, so
+    no dependency ordering is needed. ``CASCADE`` covers references from outside
+    the set.
+    """
+    literals = ", ".join("'" + s.replace("'", "''") + "'" for s in schemas)
+    return (
+        "DO $$ DECLARE stmt text; BEGIN "
+        "SELECT string_agg(format('%I.%I', schemaname, tablename), ', ') INTO stmt "
+        f"FROM pg_tables WHERE schemaname = ANY(ARRAY[{literals}]); "
+        "IF stmt IS NOT NULL THEN "
+        "EXECUTE 'TRUNCATE TABLE ' || stmt || ' RESTART IDENTITY CASCADE'; "
+        "END IF; END $$"
+    )
+
+
 def _match_like(value: str, pattern: str) -> bool:
     """Case-insensitive SQL-LIKE-ish match supporting a single ``%`` wildcard."""
     value, pattern = value.lower(), pattern.lower()
@@ -286,13 +311,14 @@ class SupabaseService:
         (``rolsuper = f``). The session setting reaches the same end without
         touching trigger objects, and expires with the connection.
 
-        The reset passes ``--no-seed``. ``supabase db reset`` otherwise runs the
-        project's seed script, and dev fixtures must not exist before a
-        prod-data load: where they collide the restore fails (a seeded user with
-        a fixed UUID vs the same primary key in ``COPY users``), and where they
-        do not, fake rows mix silently into what is meant to be a copy of
-        production. Fixtures belong in ``post_restore_cmd``, which runs *after*
-        the load.
+        The reset passes ``--no-seed``, and the load truncates ``data_schemas``
+        first. Both exist because a ``--data-only`` dump assumes empty tables,
+        and two different mechanisms can leave rows behind: the seed script, and
+        migrations themselves (STK's initial schema inserts a test user at a
+        fixed UUID). The truncate is the general guard — it does not care what
+        put the rows there — while ``--no-seed`` keeps dev fixtures out of a
+        copy of production on principle. Fixtures belong in
+        ``post_restore_cmd``, which runs *after* the load.
 
         Raises:
             ValueError: if ``local_db_url`` does not point at a loopback host.
@@ -348,10 +374,12 @@ class SupabaseService:
                     "--dbname",
                     local_uri,
                     # psql runs --command / --file in the order given, and
-                    # --single-transaction wraps them, so this holds for the
-                    # whole load.
+                    # --single-transaction wraps them, so these hold for the
+                    # whole load — and roll back with it if the load fails.
                     "--command",
                     "SET session_replication_role = 'replica'",
+                    "--command",
+                    _truncate_schemas_sql(data_schemas),
                     "--file",
                     str(dump_path),
                 ],
