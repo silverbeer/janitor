@@ -9,7 +9,12 @@ from pathlib import Path
 import pytest
 
 from janitor.models.system import AdminUser
-from janitor.services.supabase import SupabaseService, _is_local_url, _split_pg_secret
+from janitor.services.supabase import (
+    SupabaseService,
+    _is_local_url,
+    _split_pg_secret,
+    _truncate_schemas_sql,
+)
 from tests.conftest import FakeRunner
 
 
@@ -279,6 +284,33 @@ def test_restore_skips_the_seed(tmp_path: Path, fake_runner: FakeRunner) -> None
     )
     reset_cmd = next(c for c in fake_runner.calls if c[0] == "supabase")
     assert "--no-seed" in reset_cmd
+
+
+def test_restore_truncates_data_schemas_first(tmp_path: Path, fake_runner: FakeRunner) -> None:
+    """Every configured schema is emptied before the data-only load (SB-519).
+
+    --no-seed is not enough: STK's *initial schema migration* inserts a test
+    user at a fixed UUID, and applying migrations is not optional. The truncate
+    does not care which mechanism left rows behind.
+    """
+    SupabaseService(runner=fake_runner).restore_from_prod(
+        "alpha",
+        tmp_path,
+        local_db_url=_LOCAL_URL,
+        prod_db_url=_PROD_URL,
+        data_schemas=["public", "extra"],
+    )
+    load_cmd = next(c for c in fake_runner.calls if c[0] == "psql")
+    truncate = next(a for a in load_cmd if "TRUNCATE TABLE" in a)
+    assert "'public'" in truncate and "'extra'" in truncate
+    # Must run before the dump, or it wipes the rows it just loaded.
+    assert load_cmd.index(truncate) < load_cmd.index("--file")
+
+
+def test_truncate_sql_quotes_schema_names() -> None:
+    """Schema names are quoted into the literal, so an apostrophe cannot break out."""
+    sql = _truncate_schemas_sql(["pub'lic"])
+    assert "'pub''lic'" in sql
 
 
 # ---- sync-users ------------------------------------------------------------
