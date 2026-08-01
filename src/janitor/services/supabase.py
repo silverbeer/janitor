@@ -286,6 +286,14 @@ class SupabaseService:
         (``rolsuper = f``). The session setting reaches the same end without
         touching trigger objects, and expires with the connection.
 
+        The reset passes ``--no-seed``. ``supabase db reset`` otherwise runs the
+        project's seed script, and dev fixtures must not exist before a
+        prod-data load: where they collide the restore fails (a seeded user with
+        a fixed UUID vs the same primary key in ``COPY users``), and where they
+        do not, fake rows mix silently into what is meant to be a copy of
+        production. Fixtures belong in ``post_restore_cmd``, which runs *after*
+        the load.
+
         Raises:
             ValueError: if ``local_db_url`` does not point at a loopback host.
         """
@@ -300,9 +308,9 @@ class SupabaseService:
             logger.info("supabase.restore.dry_run", project=project_name)
             return RestoreResult(project=project_name, dump_path=dump_path, dry_run=True)
 
-        # 1. Reset local — schema comes from migrations, not the dump.
+        # 1. Reset local — schema from migrations, no seed (prod data is the data).
         self.runner.run(
-            ["supabase", "db", "reset", "--workdir", str(project_path)],
+            ["supabase", "db", "reset", "--no-seed", "--workdir", str(project_path)],
             mutating=True,
             check=True,
             timeout=600,
