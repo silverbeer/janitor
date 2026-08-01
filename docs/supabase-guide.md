@@ -60,6 +60,23 @@ jt doctor                                     # confirms Docker, Supabase CLI, e
 Already installed without the extra? Reinstall to add it:
 `uv tool install 'janitor-cli[supabase] @ git+https://github.com/silverbeer/janitor.git' --reinstall`.
 
+### Installing from a local checkout — you need `--no-cache`
+
+Working on janitor itself? `--force` alone is **not enough**. uv will happily
+reinstall from a cached build and keep serving the old code:
+
+```bash
+uv tool install --force --reinstall --no-cache ~/gitrepos/janitor
+```
+
+The failure is silent and confusing: `jt` reports errors whose wording no longer
+exists in the source you are reading. If a fix you just made appears to have no
+effect, check the installed copy before debugging your change:
+
+```bash
+grep -n "some new string" ~/.local/share/uv/tools/janitor-cli/lib/python*/site-packages/janitor/commands/supabase.py
+```
+
 ---
 
 ## 4. Configure
@@ -91,10 +108,21 @@ prod_api_url          = "https://<your-ref>.supabase.co"
 prod_service_key_env  = "STK_PROD_SERVICE_ROLE_KEY"
 local_service_key_env = "STK_LOCAL_SERVICE_ROLE_KEY"
 
+# Runs after a successful restore-from-prod, in the project path via `bash -lc`.
+# stdio is inherited, so the hook's own prompts (including Touch ID) work.
+post_restore_cmd = '''jt supabase sync-users stk && eval "$(supabase status -o env | sed 's/^/export SB_/')" && SUPABASE_URL="$SB_API_URL" SERVICE_KEY="$SB_SERVICE_ROLE_KEY" uv run python scripts/seed_local_users.py'''
+
 # The keys here ARE the default sync list → STK syncs exactly this user.
 [supabase.projects.stk.user_passwords]
 "you@example.com" = "letmein"
 ```
+
+### `post_restore_cmd` — one command instead of three
+
+Without it, a fresh local needs `restore-from-prod`, then `sync-users`, then any
+project-specific seeding. With it, `restore-from-prod` chains them itself, so the
+DB is usable in one step. It runs only on a real restore — never on `--dry-run`,
+and never if the restore failed. A non-zero exit from the hook fails the command.
 
 ### Project name: key vs folder
 
@@ -158,6 +186,54 @@ in 1Password — it comes from `supabase status`). Requires the 1Password CLI (`
 installed and its desktop-app integration unlocked. `jt --dry-run secrets pull stk`
 previews without reading any secret.
 
+This is the preferred route for STK — it is one command, it never puts a secret
+in your shell history, and it is the same path an agent can tell you to run.
+
+### Use the pooler URL, not the direct host
+
+Supabase gives you two connection strings. Only one of them works on a typical
+home network:
+
+| Host | DNS | Usable on IPv4-only? |
+|---|---|---|
+| `db.<ref>.supabase.co` (direct) | **AAAA only — no A record** | ✗ No route to host |
+| `aws-N-<region>.pooler.supabase.com:6543` | A records (IPv4) | ✓ Yes |
+
+Verified 2026-08-01: `db.<ref>.supabase.co` resolves to an IPv6 address and
+publishes no A record at all, and the Mac mini has no global IPv6 address. The
+direct host is therefore unreachable, and `pg_dump` fails with *"No route to
+host"*. This is a property of the network, not a misconfiguration — nothing in
+janitor can work around it.
+
+Two things to get right in the pooler URL:
+
+* the username is **`postgres.<ref>`**, not `postgres` — the pooler routes by
+  tenant and rejects the bare username with a confusing tenant error
+* the port is **6543** (session pooler), not 5432
+
+```bash
+export STK_PROD_DATABASE_URL='postgresql://postgres.<ref>:<pw>@aws-0-us-east-1.pooler.supabase.com:6543/postgres'
+```
+
+### When the pooler will not work either — the REST fallback
+
+If the pooler rejects the tenant, STK keeps a REST-based restore that needs no
+Postgres connection at all, only HTTPS:
+
+```bash
+cd ~/gitrepos/myrunstreak.run && ./scripts/restore_prod_to_local.sh
+```
+
+It dumps prod over the Supabase REST API with the service-role key, calls
+`jt supabase sync-users stk`, then reseeds the coach/athlete fixtures. Slower and
+STK-specific, but it works anywhere HTTPS works. It excludes auth users, OAuth
+tokens and invites by design.
+
+**Prefer `jt supabase restore-from-prod stk`.** Reach for the script only when the
+pooler path is blocked — and if it turns out the pooler is permanently
+unavailable here, the REST transport belongs in janitor rather than in one repo's
+`scripts/` directory (SB-406, SB-516).
+
 ---
 
 ## 6. Run the commands
@@ -187,6 +263,9 @@ Resets the local DB to migrations, then loads prod `public` data. **Wipes local
 data first** — it confirms before doing so. A loopback guard refuses to run if
 `local_db_url` isn’t local, so it can never touch prod.
 
+If the project sets `post_restore_cmd` (STK does), user sync and dev seeding run
+automatically at the end — you do not need the separate `sync-users` call below.
+
 ### Sync users (so you can log in)
 
 ```bash
@@ -199,6 +278,15 @@ ids** so the data you just restored lines up. Log in with the email + the passwo
 you set.
 
 ### Typical fresh-local flow
+
+For a project with `post_restore_cmd` (STK) — one command, logins included:
+
+```bash
+source ~/.config/janitor/stk.env
+jt supabase restore-from-prod stk
+```
+
+Without the hook, run both:
 
 ```bash
 source ~/.config/janitor/stk.env
@@ -222,8 +310,13 @@ jt --yes supabase backup stk                  # skip confirmation (automation)
 | Symptom | Fix |
 |---|---|
 | `pg_dump / psql not found` | `brew install libpq && brew link --force libpq` |
-| `Project 'stk' not found` | Set `supabase.projects.stk.path` to the repo on this machine |
+| `Project 'stk' not found` | Set `supabase.projects.stk.path` to the repo on this machine. If it *is* set, your `jt` is stale — reinstall with `--no-cache` (see §3) |
+| `Project 'stk' not found in search paths.` | Wording from a pre-SB-205 build. Reinstall with `--no-cache` |
 | `Missing config for user sync` | Add `prod_api_url` + the `*_service_key_env` vars; the message lists exactly what's absent |
 | `No prod DB URL for 'stk'` | Set `prod_db_url_env` in config and `export` that variable |
-| Restore runs but login fails | Run `sync-users` after `restore-from-prod` — restore loads data, sync creates the auth login |
+| `No route to host` / connection times out | You are using the direct `db.<ref>.supabase.co` host, which is IPv6-only. Switch to the pooler URL (§5) |
+| Pooler rejects the tenant | Username must be `postgres.<ref>`, not `postgres`. Still failing? Use the REST fallback (§5) |
+| `No Supabase projects found in configured search paths` | `~` in `search_paths` is expanded as of #14 — if you still see this, your `jt` predates it. Reinstall with `--no-cache` (§3) |
+| Restore runs but login fails | Run `sync-users` after `restore-from-prod` — restore loads data, sync creates the auth login. Or set `post_restore_cmd` (§4) so it happens automatically |
+| A code change to janitor has no effect | `uv tool install --force` served a cached build. Add `--no-cache` (§3) |
 | Config changes ignored | Config must be at `~/.config/janitor/config.toml`, not in a repo |
