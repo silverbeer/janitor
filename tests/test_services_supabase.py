@@ -261,6 +261,26 @@ def test_restore_suppresses_fks_without_superuser(tmp_path: Path, fake_runner: F
     assert "ON_ERROR_STOP=on" in load_cmd
 
 
+def test_restore_skips_the_seed(tmp_path: Path, fake_runner: FakeRunner) -> None:
+    """The reset must not seed — prod data is the data (SB-518).
+
+    ``supabase db reset`` runs the project's seed script by default. A seeded
+    row with a fixed UUID collides with the same primary key in the prod dump
+    ("duplicate key value violates unique constraint users_pkey"), and where it
+    does not collide it mixes fixtures into a supposed copy of production.
+    Fixtures belong in ``post_restore_cmd``, after the load.
+    """
+    SupabaseService(runner=fake_runner).restore_from_prod(
+        "alpha",
+        tmp_path,
+        local_db_url=_LOCAL_URL,
+        prod_db_url=_PROD_URL,
+        data_schemas=["public"],
+    )
+    reset_cmd = next(c for c in fake_runner.calls if c[0] == "supabase")
+    assert "--no-seed" in reset_cmd
+
+
 # ---- sync-users ------------------------------------------------------------
 
 
