@@ -66,10 +66,16 @@ Working on janitor itself? `--force` alone is **not enough**. uv will happily
 reinstall from a cached build and keep serving the old code:
 
 ```bash
-uv tool install --force --reinstall --no-cache ~/gitrepos/janitor
+cd ~/gitrepos/janitor
+uv tool install --force --reinstall --no-cache "janitor-cli[supabase] @ file://$PWD"
 ```
 
-The failure is silent and confusing: `jt` reports errors whose wording no longer
+**Keep `[supabase]` on the local-path form too.** A bare path installs base
+dependencies only, and `--force --reinstall` turns that into a downgrade of a
+working install — the extra is removed silently, and the next `sync-users` fails
+with `ModuleNotFoundError: No module named 'supabase'`.
+
+The caching failure is equally quiet: `jt` reports errors whose wording no longer
 exists in the source you are reading. If a fix you just made appears to have no
 effect, check the installed copy before debugging your change:
 
@@ -321,4 +327,5 @@ jt --yes supabase backup stk                  # skip confirmation (automation)
 | `No Supabase projects found in configured search paths` | `~` in `search_paths` is expanded as of #14 — if you still see this, your `jt` predates it. Reinstall with `--no-cache` (§3) |
 | Restore runs but login fails | Run `sync-users` after `restore-from-prod` — restore loads data, sync creates the auth login. Or set `post_restore_cmd` (§4) so it happens automatically |
 | A code change to janitor has no effect | `uv tool install --force` served a cached build. Add `--no-cache` (§3) |
+| `ModuleNotFoundError: No module named 'supabase'` on `sync-users` | A reinstall dropped the extra. Reinstall keeping it — and if you are working from a local checkout use the `file://$PWD` form in §3, not the runtime error's git-install suggestion, which would replace your checkout build |
 | Config changes ignored | Config must be at `~/.config/janitor/config.toml`, not in a repo |
