@@ -108,6 +108,32 @@ class DockerService:
         result = self.runner.run(["docker", "volume", "ls", "--filter", "dangling=true", "-q"])
         return {n for n in result.stdout.split() if n}
 
+    def reclaimable_estimate(
+        self,
+        usage: DockerUsage,
+        *,
+        all_images: bool = False,
+        volumes: bool = False,
+        build_cache: bool = True,
+    ) -> int:
+        """Estimate the bytes a prune with these options would actually free.
+
+        ``usage.total_reclaimable`` is the ceiling — everything Docker considers
+        unused. A safe prune cannot reach it: it only removes *dangling* images,
+        leaving unused-but-tagged ones in place. Scoping the estimate to the
+        selected options keeps the confirmation prompt honest.
+        """
+        total = usage.reclaimable_for("Containers")
+        if all_images:
+            total += usage.reclaimable_for("Images")
+        else:
+            total += sum(image.size for image in self.images(dangling_only=True))
+        if volumes:
+            total += usage.reclaimable_for("Local Volumes")
+        if build_cache:
+            total += usage.reclaimable_for("Build Cache")
+        return total
+
     def prune(
         self,
         *,

@@ -26,8 +26,14 @@ homelab operators.
 | `jt secrets`  | Shared Varlock + 1Password secret resolution (one schema convention across repos) |
 | `jt k3s`      | Cluster/node/pod health, clean up completed jobs |
 
-Every destructive command supports **`--dry-run`** (preview) and **`--yes`**
-(automation), and prompts for confirmation otherwise.
+Every destructive command honours **`--dry-run`** (preview) and **`--yes`**
+(automation), and prompts for confirmation otherwise. Both are **global** flags —
+they go before the subcommand:
+
+```bash
+jt --dry-run docker prune    # preview
+jt --yes docker prune        # no prompt (automation)
+```
 
 ## Installation
 
