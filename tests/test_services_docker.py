@@ -81,6 +81,68 @@ def test_volumes_in_use(fake_runner: FakeRunner) -> None:
     assert by_name["dangling-vol"].in_use is False
 
 
+def _usage_with_all_types(fake_runner: FakeRunner) -> object:
+    stdout = "\n".join(
+        [
+            _df_line("Images", 10, 2, "100GB", "80GB (80%)"),
+            _df_line("Containers", 10, 2, "100MB", "60MB (60%)"),
+            _df_line("Local Volumes", 5, 2, "3GB", "120MB (4%)"),
+            _df_line("Build Cache", 100, 0, "50GB", "17GB (34%)"),
+        ]
+    )
+    fake_runner.stub(["docker", "system", "df"], stdout=stdout)
+    return DockerService(runner=fake_runner).usage()
+
+
+def test_usage_record_lookup_ignores_case_and_spaces(fake_runner: FakeRunner) -> None:
+    usage = _usage_with_all_types(fake_runner)
+    assert usage.record("local volumes") is not None  # type: ignore[attr-defined]
+    assert usage.reclaimable_for("LocalVolumes") == 120 * 1024**2  # type: ignore[attr-defined]
+    assert usage.reclaimable_for("Nonexistent") == 0  # type: ignore[attr-defined]
+
+
+def test_reclaimable_estimate_safe_counts_only_dangling_images(
+    fake_runner: FakeRunner,
+) -> None:
+    usage = _usage_with_all_types(fake_runner)
+    fake_runner.stub(
+        ["docker", "images"],
+        stdout=json.dumps({"ID": "a", "Repository": "<none>", "Tag": "<none>", "Size": "2GB"}),
+    )
+    estimate = DockerService(runner=fake_runner).reclaimable_estimate(
+        usage,  # type: ignore[arg-type]
+        all_images=False,
+        volumes=False,
+        build_cache=True,
+    )
+    # dangling image + containers + build cache — NOT the 80GB of unused tagged images.
+    assert estimate == 2 * 1024**3 + 60 * 1024**2 + 17 * 1024**3
+    assert estimate < usage.total_reclaimable  # type: ignore[attr-defined]
+
+
+def test_reclaimable_estimate_aggressive_reaches_total(fake_runner: FakeRunner) -> None:
+    usage = _usage_with_all_types(fake_runner)
+    estimate = DockerService(runner=fake_runner).reclaimable_estimate(
+        usage,  # type: ignore[arg-type]
+        all_images=True,
+        volumes=True,
+        build_cache=True,
+    )
+    assert estimate == usage.total_reclaimable  # type: ignore[attr-defined]
+
+
+def test_reclaimable_estimate_excludes_disabled_build_cache(fake_runner: FakeRunner) -> None:
+    usage = _usage_with_all_types(fake_runner)
+    fake_runner.stub(["docker", "images"], stdout="")
+    estimate = DockerService(runner=fake_runner).reclaimable_estimate(
+        usage,  # type: ignore[arg-type]
+        all_images=False,
+        volumes=False,
+        build_cache=False,
+    )
+    assert estimate == 60 * 1024**2
+
+
 def test_prune_safe(fake_runner: FakeRunner) -> None:
     ran = DockerService(runner=fake_runner).prune(all_images=False, build_cache=True)
     assert ["docker", "system", "prune", "--force"] in fake_runner.calls

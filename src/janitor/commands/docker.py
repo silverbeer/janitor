@@ -54,12 +54,27 @@ def reclaim(ctx: typer.Context) -> None:
     service = _service(ctx)
     if service is None:
         raise typer.Exit(code=1)
+    state: AppState = ctx.obj
     usage = service.usage()
+    build_cache = state.config.docker.prune_build_cache
+    safe = service.reclaimable_estimate(
+        usage,
+        all_images=False,
+        volumes=state.config.docker.prune_volumes,
+        build_cache=build_cache,
+    )
+    aggressive = service.reclaimable_estimate(
+        usage, all_images=True, volumes=True, build_cache=build_cache
+    )
     console.print(
         f"[accent]Reclaimable space:[/] {format_bytes(usage.total_reclaimable)} "
         f"of {format_bytes(usage.total_size)} used."
     )
-    console.print("[muted]Run [bold]jt docker prune[/bold] to reclaim it.[/muted]")
+    console.print(f"  [muted]jt docker prune[/muted]              ~{format_bytes(safe)}")
+    console.print(f"  [muted]jt docker prune --aggressive[/muted] ~{format_bytes(aggressive)}")
+    console.print(
+        "[muted]Aggressive also removes unused-but-tagged images and unused volumes.[/muted]"
+    )
 
 
 @app.command()
@@ -76,11 +91,22 @@ def prune(
         raise typer.Exit(code=1)
 
     usage = service.usage()
-    mode = "aggressive" if aggressive else "safe"
-    console.print(
-        f"[warn]About to run a [bold]{mode}[/bold] prune "
-        f"(~{format_bytes(usage.total_reclaimable)} reclaimable).[/]"
+    prune_volumes = aggressive or state.config.docker.prune_volumes
+    prune_build_cache = state.config.docker.prune_build_cache
+    estimate = service.reclaimable_estimate(
+        usage,
+        all_images=aggressive,
+        volumes=prune_volumes,
+        build_cache=prune_build_cache,
     )
+    mode = "an [bold]aggressive[/bold]" if aggressive else "a [bold]safe[/bold]"
+    console.print(f"[warn]About to run {mode} prune (~{format_bytes(estimate)} reclaimable).[/]")
+    if not aggressive and estimate < usage.total_reclaimable:
+        console.print(
+            f"[muted]Docker reports {format_bytes(usage.total_reclaimable)} reclaimable in "
+            f"total; the rest is unused-but-tagged images and volumes that only "
+            f"[bold]--aggressive[/bold] removes.[/muted]"
+        )
     if state.dry_run:
         console.print("[muted]Dry-run: no changes will be made.[/muted]")
     elif not confirm("Proceed with prune?", assume_yes=state.assume_yes):
@@ -89,8 +115,8 @@ def prune(
 
     ran = service.prune(
         all_images=aggressive,
-        volumes=aggressive or state.config.docker.prune_volumes,
-        build_cache=state.config.docker.prune_build_cache,
+        volumes=prune_volumes,
+        build_cache=prune_build_cache,
     )
     for description in ran:
         prefix = "[muted]would run[/muted]" if state.dry_run else "[ok]ran[/ok]"
