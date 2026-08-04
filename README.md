@@ -113,10 +113,26 @@ jt version                      # show version
 jt docker status                # docker system df
 jt docker reclaim               # how much is reclaimable
 jt docker prune                 # safe prune (confirms first)
+jt docker prune --stale         # remove superseded image versions only
 jt docker prune --aggressive    # remove all unused images + volumes + cache
-jt docker images                # list images, flag dangling
+jt docker images                # list images, flag dangling + stale
+jt docker images --stale        # only superseded versions, with total
 jt docker volumes               # list volumes, flag unused
 
+```
+
+**Three prune tiers.** Safe removes dangling images, stopped containers and
+build cache. `--stale` adds superseded image versions — every tag that is not
+`latest`, not referenced by any container (running *or* stopped), and not the
+newest version of its repository. `--aggressive` removes everything Docker
+considers unused, including images you built locally.
+
+`--stale` exists because version-pinning tools sprawl: a `supabase` CLI upgrade
+pulls new pinned images and never collects the old ones. One Mac mini had 18
+versions of `realtime` on disk with 1 in use, and 84 GB of superseded Supabase
+images that a safe prune could not touch.
+
+```bash
 jt disk usage /                 # filesystem utilization
 jt disk largest-files ~ -n 30   # 30 biggest files under home
 jt disk largest-dirs ~          # biggest directories

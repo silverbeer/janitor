@@ -43,6 +43,63 @@ def test_docker_images(patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPat
     assert "nginx" in result.stdout
 
 
+def _stale_image_stubs(patched_runner: FakeRunner) -> None:
+    patched_runner.stub(
+        ["docker", "images"],
+        stdout="\n".join(
+            [
+                json.dumps(
+                    {
+                        "ID": "a",
+                        "Repository": "redis",
+                        "Tag": "6",
+                        "Size": "100MB",
+                        "CreatedAt": "2026-01-01 10:00:00 -0500 EST",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "ID": "b",
+                        "Repository": "redis",
+                        "Tag": "7",
+                        "Size": "100MB",
+                        "CreatedAt": "2026-05-01 10:00:00 -0500 EST",
+                    }
+                ),
+            ]
+        ),
+    )
+    patched_runner.stub(["docker", "ps"], stdout="")
+
+
+def test_docker_images_stale_filter(
+    patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _docker_available(patched_runner, monkeypatch)
+    _stale_image_stubs(patched_runner)
+    result = runner.invoke(app, ["docker", "images", "--stale"])
+    assert result.exit_code == 0
+    assert "1 stale image(s)" in result.stdout
+
+
+def test_docker_prune_stale(patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    _docker_available(patched_runner, monkeypatch)
+    _stale_image_stubs(patched_runner)
+    result = runner.invoke(app, ["--yes", "docker", "prune", "--stale"])
+    assert result.exit_code == 0
+    assert ["docker", "rmi", "redis:6"] in patched_runner.calls
+    # The newest version must survive.
+    assert ["docker", "rmi", "redis:7"] not in patched_runner.calls
+
+
+def test_docker_prune_stale_conflicts_with_aggressive(
+    patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _docker_available(patched_runner, monkeypatch)
+    result = runner.invoke(app, ["--yes", "docker", "prune", "--stale", "--aggressive"])
+    assert result.exit_code == 2
+
+
 def test_docker_volumes(patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch) -> None:
     _docker_available(patched_runner, monkeypatch)
     patched_runner.stub(["docker", "volume", "ls", "--filter"], stdout="")
