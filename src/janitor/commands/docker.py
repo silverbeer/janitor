@@ -6,6 +6,7 @@ import typer
 from rich.table import Table
 
 from janitor.context import AppState
+from janitor.models.docker import DockerImage
 from janitor.services.docker import DockerService
 from janitor.utils.console import console, err_console
 from janitor.utils.format import format_bytes
@@ -83,12 +84,24 @@ def prune(
     aggressive: bool = typer.Option(
         False, "--aggressive", "-a", help="Remove all unused images, volumes, and cache."
     ),
+    stale: bool = typer.Option(
+        False,
+        "--stale",
+        help="Remove only images superseded by a newer tag of the same repository.",
+    ),
 ) -> None:
     """Prune unused Docker data. Safe by default; ``--aggressive`` removes more."""
     state: AppState = ctx.obj
     service = _service(ctx)
     if service is None:
         raise typer.Exit(code=1)
+
+    if stale and aggressive:
+        err_console.print("[err]--stale and --aggressive are mutually exclusive.[/]")
+        raise typer.Exit(code=2)
+    if stale:
+        _prune_stale(state, service)
+        return
 
     usage = service.usage()
     prune_volumes = aggressive or state.config.docker.prune_volumes
@@ -124,25 +137,82 @@ def prune(
     console.print("[ok]Prune complete.[/]")
 
 
+def _prune_stale(state: AppState, service: DockerService) -> None:
+    """Remove superseded image versions, keeping everything in use."""
+    stale_images = service.stale_images()
+    if not stale_images:
+        console.print("[ok]No stale images — nothing to prune.[/]")
+        return
+
+    total = sum(image.size for image in stale_images)
+    console.print(
+        f"[warn]About to remove [bold]{len(stale_images)}[/bold] stale image(s) "
+        f"(up to {format_bytes(total)}).[/]"
+    )
+    console.print(
+        "[muted]Images in use by any container — running or stopped — are kept, as is "
+        "the newest version of every repository.[/muted]"
+    )
+    if state.dry_run:
+        console.print("[muted]Dry-run: no changes will be made.[/muted]")
+    elif not confirm("Proceed with stale image removal?", assume_yes=state.assume_yes):
+        console.print("[muted]Aborted.[/muted]")
+        raise typer.Exit(code=0)
+
+    removed = service.remove_images([image.reference for image in stale_images])
+    verb = "would remove" if state.dry_run else "removed"
+    console.print(f"[ok]{verb.capitalize()} {len(removed)} of {len(stale_images)} image(s).[/]")
+    if not state.dry_run and len(removed) < len(stale_images):
+        console.print(
+            "[muted]Some images were skipped — they are still referenced by another tag "
+            "or image.[/muted]"
+        )
+
+
 @app.command()
-def images(ctx: typer.Context) -> None:
-    """List Docker images, flagging dangling ones."""
+def images(
+    ctx: typer.Context,
+    stale: bool = typer.Option(
+        False, "--stale", help="Only images superseded by a newer tag of the same repository."
+    ),
+) -> None:
+    """List Docker images, flagging dangling and stale ones."""
     service = _service(ctx)
     if service is None:
         raise typer.Exit(code=1)
-    table = Table(title="Docker Images", title_style="heading")
+    listed = service.images()
+    if stale:
+        listed = [image for image in listed if image.stale]
+        if not listed:
+            console.print("[ok]No stale images — every repository is on a single version.[/]")
+            return
+    table = Table(title="Stale Docker Images" if stale else "Docker Images", title_style="heading")
     table.add_column("Repository")
     table.add_column("Tag")
     table.add_column("Size", justify="right")
     table.add_column("Dangling", justify="center")
-    for image in sorted(service.images(), key=lambda i: i.size, reverse=True):
+    table.add_column("Stale", justify="center")
+    for image in sorted(listed, key=lambda i: i.size, reverse=True):
         table.add_row(
             image.repository,
             image.tag,
             format_bytes(image.size),
             "[warn]yes[/]" if image.dangling else "",
+            "[warn]yes[/]" if image.stale else "",
         )
     console.print(table)
+    if stale:
+        _print_stale_total(listed)
+
+
+def _print_stale_total(stale_images: list[DockerImage]) -> None:
+    total = sum(image.size for image in stale_images)
+    console.print(
+        f"[accent]{len(stale_images)} stale image(s):[/] up to {format_bytes(total)} reclaimable."
+    )
+    console.print(
+        "[muted]Actual reclaim is lower — versions of the same image share base layers.[/muted]"
+    )
 
 
 @app.command()

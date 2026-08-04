@@ -61,6 +61,121 @@ def test_images_flags_dangling(fake_runner: FakeRunner) -> None:
     assert images[0].dangling is False
 
 
+def _img(id_: str, repo: str, tag: str, size: str, created: str) -> str:
+    return json.dumps(
+        {"ID": id_, "Repository": repo, "Tag": tag, "Size": size, "CreatedAt": created}
+    )
+
+
+def _stub_images(fake_runner: FakeRunner, lines: list[str], containers: str = "") -> None:
+    fake_runner.stub(["docker", "images"], stdout="\n".join(lines))
+    fake_runner.stub(["docker", "ps"], stdout=containers)
+
+
+def test_stale_marks_superseded_versions(fake_runner: FakeRunner) -> None:
+    _stub_images(
+        fake_runner,
+        [
+            _img("sha256:a", "supabase/realtime", "v2.1", "1GB", "2026-01-01 10:00:00 -0500 EST"),
+            _img("sha256:b", "supabase/realtime", "v2.2", "1GB", "2026-02-01 10:00:00 -0500 EST"),
+            _img("sha256:c", "supabase/realtime", "v2.3", "1GB", "2026-03-01 10:00:00 -0500 EST"),
+        ],
+        containers="supabase/realtime:v2.2\n",
+    )
+    by_tag = {i.tag: i for i in DockerService(runner=fake_runner).images()}
+    # The in-use tag wins over the newest one.
+    assert by_tag["v2.2"].stale is False
+    assert by_tag["v2.1"].stale is True
+    assert by_tag["v2.3"].stale is True
+
+
+def test_stale_keeps_newest_when_nothing_is_in_use(fake_runner: FakeRunner) -> None:
+    _stub_images(
+        fake_runner,
+        [
+            _img("sha256:a", "redis", "6", "100MB", "2026-01-01 10:00:00 -0500 EST"),
+            _img("sha256:b", "redis", "7", "100MB", "2026-05-01 10:00:00 -0500 EST"),
+        ],
+    )
+    by_tag = {i.tag: i for i in DockerService(runner=fake_runner).images()}
+    assert by_tag["7"].stale is False
+    assert by_tag["6"].stale is True
+
+
+def test_single_version_repository_is_never_stale(fake_runner: FakeRunner) -> None:
+    _stub_images(
+        fake_runner,
+        [_img("sha256:a", "nginx", "latest", "100MB", "2026-01-01 10:00:00 -0500 EST")],
+    )
+    assert DockerService(runner=fake_runner).images()[0].stale is False
+
+
+def test_stale_respects_bare_repo_and_id_references(fake_runner: FakeRunner) -> None:
+    _stub_images(
+        fake_runner,
+        [
+            _img("sha256:a", "nginx", "latest", "100MB", "2026-01-01 10:00:00 -0500 EST"),
+            _img("sha256:b", "nginx", "1.2", "100MB", "2026-06-01 10:00:00 -0500 EST"),
+            _img("sha256:deadbeefcafe01", "app", "old", "1GB", "2026-01-01 10:00:00 -0500 EST"),
+            _img("sha256:f00d", "app", "new", "1GB", "2026-06-01 10:00:00 -0500 EST"),
+        ],
+        # bare "nginx" means nginx:latest; the app container names an image by id.
+        containers="nginx\ndeadbeefcafe01\n",
+    )
+    by_ref = {i.reference: i for i in DockerService(runner=fake_runner).images()}
+    assert by_ref["nginx:latest"].stale is False
+    assert by_ref["nginx:1.2"].stale is True
+    assert by_ref["app:old"].stale is False
+    assert by_ref["app:new"].stale is True
+
+
+def test_latest_tag_is_never_stale(fake_runner: FakeRunner) -> None:
+    _stub_images(
+        fake_runner,
+        [
+            _img("sha256:a", "app", "latest", "1GB", "2026-01-01 10:00:00 -0500 EST"),
+            _img("sha256:b", "app", "v2", "1GB", "2026-06-01 10:00:00 -0500 EST"),
+            _img("sha256:c", "app", "v1", "1GB", "2025-06-01 10:00:00 -0500 EST"),
+        ],
+    )
+    by_tag = {i.tag: i for i in DockerService(runner=fake_runner).images()}
+    # `latest` is older than v2 but still kept; only the pinned old tag goes.
+    assert by_tag["latest"].stale is False
+    assert by_tag["v2"].stale is False
+    assert by_tag["v1"].stale is True
+
+
+def test_stale_images_helper_filters(fake_runner: FakeRunner) -> None:
+    _stub_images(
+        fake_runner,
+        [
+            _img("sha256:a", "redis", "6", "100MB", "2026-01-01 10:00:00 -0500 EST"),
+            _img("sha256:b", "redis", "7", "100MB", "2026-05-01 10:00:00 -0500 EST"),
+        ],
+    )
+    stale = DockerService(runner=fake_runner).stale_images()
+    assert [i.tag for i in stale] == ["6"]
+
+
+def test_dangling_images_are_not_marked_stale(fake_runner: FakeRunner) -> None:
+    _stub_images(
+        fake_runner,
+        [
+            _img("sha256:a", "<none>", "<none>", "50MB", "2026-01-01 10:00:00 -0500 EST"),
+            _img("sha256:b", "<none>", "<none>", "50MB", "2026-05-01 10:00:00 -0500 EST"),
+        ],
+    )
+    images = DockerService(runner=fake_runner).images()
+    assert all(i.dangling for i in images)
+    assert not any(i.stale for i in images)
+
+
+def test_remove_images_reports_removed(fake_runner: FakeRunner) -> None:
+    removed = DockerService(runner=fake_runner).remove_images(["redis:6", "redis:5"])
+    assert removed == ["redis:6", "redis:5"]
+    assert ["docker", "rmi", "redis:6"] in fake_runner.calls
+
+
 def test_volumes_in_use(fake_runner: FakeRunner) -> None:
     fake_runner.stub(
         ["docker", "volume", "ls", "--filter"],

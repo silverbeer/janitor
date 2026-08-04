@@ -58,6 +58,14 @@ class DockerImage(BaseModel):
     tag: str = "<none>"
     size: int = 0
     dangling: bool = False
+    created_at: str = ""
+    stale: bool = False
+    """True when a newer tag of the same repository exists and nothing uses this one."""
+
+    @property
+    def reference(self) -> str:
+        """The ``repository:tag`` reference used to address this image."""
+        return f"{self.repository}:{self.tag}"
 
 
 class DockerVolume(BaseModel):
