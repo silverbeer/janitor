@@ -30,6 +30,34 @@ def test_disk_usage_zero_total() -> None:
     assert DiskUsage(path=Path("/"), total=0, used=0, free=0).percent_used == 0.0
 
 
+def _usage(percent: int) -> DiskUsage:
+    return DiskUsage(path=Path("/"), total=100, used=percent, free=100 - percent)
+
+
+def test_disk_health_classifies_pressure() -> None:
+    assert _usage(50).health() is HealthStatus.OK
+    assert _usage(80).health() is HealthStatus.WARN
+    assert _usage(98).health() is HealthStatus.ERROR
+
+
+def test_disk_health_boundaries_are_inclusive() -> None:
+    # 75 and 90 are the thresholds themselves, not the first value past them.
+    assert _usage(74).health() is HealthStatus.OK
+    assert _usage(75).health() is HealthStatus.WARN
+    assert _usage(89).health() is HealthStatus.WARN
+    assert _usage(90).health() is HealthStatus.ERROR
+
+
+def test_disk_health_thresholds_are_overridable() -> None:
+    # A machine with different headroom tunes these via DiskConfig.
+    assert _usage(80).health(warn_percent=85, error_percent=95) is HealthStatus.OK
+    assert _usage(80).health(warn_percent=50, error_percent=70) is HealthStatus.ERROR
+
+
+def test_disk_health_of_an_empty_filesystem_is_ok() -> None:
+    assert DiskUsage(path=Path("/"), total=0, used=0, free=0).health() is HealthStatus.OK
+
+
 def test_docker_usage_totals() -> None:
     usage = DockerUsage(
         records=[

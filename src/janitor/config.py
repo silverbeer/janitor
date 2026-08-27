@@ -23,6 +23,8 @@ from pydantic_settings import (
     SettingsConfigDict,
 )
 
+from janitor.models.disk import DEFAULT_DISK_ERROR_PERCENT, DEFAULT_DISK_WARN_PERCENT
+
 #: A ``Path`` that expands a leading ``~`` at validation time. Config path fields
 #: use this so ``"~/gitrepos"`` becomes an absolute path on load — otherwise
 #: ``Path("~/gitrepos").is_dir()`` is always False (only ``expanduser()`` expands
@@ -80,6 +82,18 @@ class DiskConfig(BaseModel):
         default=100,
         ge=0,
         description="Ignore files/dirs smaller than this when scanning.",
+    )
+    warn_percent: float = Field(
+        default=DEFAULT_DISK_WARN_PERCENT,
+        ge=0,
+        le=100,
+        description="Filesystem usage at which jt doctor reports a warning.",
+    )
+    error_percent: float = Field(
+        default=DEFAULT_DISK_ERROR_PERCENT,
+        ge=0,
+        le=100,
+        description="Filesystem usage at which jt doctor reports a critical issue.",
     )
 
 
