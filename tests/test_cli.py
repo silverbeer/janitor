@@ -49,6 +49,81 @@ def test_doctor(patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch) -> 
     assert "Doctor" in result.stdout
 
 
+def _doctor_with_disk(monkeypatch: pytest.MonkeyPatch, percent: int) -> str:
+    """Run `jt doctor` with every tool healthy and the disk at `percent`."""
+    from pathlib import Path
+
+    from janitor.models.common import HealthStatus, ToolCheck
+    from janitor.models.disk import DiskUsage
+
+    monkeypatch.setattr(
+        "janitor.services.system.SystemService.all_checks",
+        lambda self: [
+            ToolCheck(name="Python", available=True, status=HealthStatus.OK, version="3.14.0")
+        ],
+    )
+    monkeypatch.setattr(
+        "janitor.services.disk.DiskService.usage",
+        lambda self, path=None: DiskUsage(
+            path=Path("/"), total=100, used=percent, free=100 - percent
+        ),
+    )
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    return result.stdout
+
+
+def test_doctor_verdict_escalates_on_a_full_disk(
+    patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bug this covers: 97.9% used, summary said "All systems healthy".
+
+    The row's threshold was a local variable the verdict never saw, so a
+    scheduled check would have reported fine every day until the disk filled
+    and ingest stopped (SB-861).
+    """
+    out = _doctor_with_disk(monkeypatch, 98)
+    assert "Critical" in out
+    assert "All systems healthy" not in out
+
+
+def test_doctor_verdict_warns_on_a_filling_disk(
+    patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = _doctor_with_disk(monkeypatch, 80)
+    assert "attention" in out.lower()
+    assert "All systems healthy" not in out
+
+
+def test_doctor_still_reports_healthy_with_room_to_spare(
+    patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert "All systems healthy" in _doctor_with_disk(monkeypatch, 50)
+
+
+def test_doctor_tool_failure_still_dominates_a_healthy_disk(
+    patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No regression: the disk must not be able to downgrade a tool ERROR."""
+    from pathlib import Path
+
+    from janitor.models.common import HealthStatus, ToolCheck
+    from janitor.models.disk import DiskUsage
+
+    monkeypatch.setattr(
+        "janitor.services.system.SystemService.all_checks",
+        lambda self: [
+            ToolCheck(name="Docker", available=False, status=HealthStatus.ERROR, detail="missing")
+        ],
+    )
+    monkeypatch.setattr(
+        "janitor.services.disk.DiskService.usage",
+        lambda self, path=None: DiskUsage(path=Path("/"), total=100, used=10, free=90),
+    )
+    result = runner.invoke(app, ["doctor"])
+    assert "Critical" in result.stdout
+
+
 def test_docker_status(patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("janitor.services.docker.which", lambda _: "/usr/bin/docker")
     patched_runner.stub(["docker", "info"], stdout="ok")

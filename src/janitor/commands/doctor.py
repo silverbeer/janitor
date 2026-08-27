@@ -21,6 +21,7 @@ def doctor(ctx: typer.Context) -> None:
     state: AppState = ctx.obj
     system = SystemService(runner=state.runner)
     disk = DiskService()
+    disk_config = state.config.disk
 
     with console.status("[info]Running health checks...", spinner="dots"):
         checks = system.all_checks()
@@ -43,10 +44,21 @@ def doctor(ctx: typer.Context) -> None:
         elif check.status is HealthStatus.WARN and worst is not HealthStatus.ERROR:
             worst = HealthStatus.WARN
 
-    disk_style = "err" if usage.percent_used >= 90 else "warn" if usage.percent_used >= 75 else "ok"
+    # The row and the verdict read the same classification. They used not to:
+    # the row went red at >=90% while the summary still said "All systems
+    # healthy", so a machine at 97.9% reported as fine (SB-861).
+    disk_health = usage.health(
+        warn_percent=disk_config.warn_percent,
+        error_percent=disk_config.error_percent,
+    )
+    if disk_health is HealthStatus.ERROR:
+        worst = HealthStatus.ERROR
+    elif disk_health is HealthStatus.WARN and worst is not HealthStatus.ERROR:
+        worst = HealthStatus.WARN
+
     table.add_row(
         "Disk (/)",
-        f"[{disk_style}]{usage.percent_used}% used[/]",
+        f"[{disk_health.style}]{usage.percent_used}% used[/]",
         f"{format_bytes(usage.free)} free of {format_bytes(usage.total)}",
     )
 
