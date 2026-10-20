@@ -92,6 +92,21 @@ uv tool install --force --reinstall --no-cache "janitor-cli[supabase] @ file://$
 
 Verify the source before diagnosing the behaviour.
 
+## Disk scans: what a size means
+
+`jt disk` sizes are **allocated** bytes (`st_blocks * 512`), hardlinks counted
+once, and scans **never cross a mount** (`st_dev` check, like `du -x`). All
+three matter on macOS, and all three were wrong before SB-1371:
+
+- `Docker.raw` is sparse — apparent 228 GB, allocated 23 GB.
+- `~/Library/Developer/CoreDevice/DeviceFS` is an FSKit mount of an attached
+  **iPhone**, not Xcode cache. It looked like 30 GB of local files. **Never
+  `rm` under it** — that deletes on the phone. Check `mount` before deleting
+  anything a scan surfaced.
+- `~/.cache/uv` is full of hardlinks; summing them double-counts.
+
+Cross-check a surprising number with `du -sxh <path>` before acting on it.
+
 ## Supabase: prod → local
 
 The full guide is [docs/supabase-guide.md](docs/supabase-guide.md). The short

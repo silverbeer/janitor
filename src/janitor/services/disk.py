@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import os
 import shutil
+from collections.abc import Iterator
 from pathlib import Path
 
 from janitor.models.disk import DiskUsage, FileEntry
 
 __all__ = ["DiskService", "categorize"]
+
+#: ``st_blocks`` is always in 512-byte units, whatever the filesystem block size.
+_BLOCK_SIZE = 512
 
 #: Directory-name → category for highlighting common offenders.
 _CATEGORY_DIRS: dict[str, str] = {
@@ -27,6 +31,8 @@ _CATEGORY_DIRS: dict[str, str] = {
     ".gradle": "build-artifact",
     "Library/Caches": "cache",
     ".cache": "cache",
+    ".npm": "cache",
+    "ms-playwright": "cache",
     ".docker": "docker",
     "Logs": "logs",
 }
@@ -34,9 +40,11 @@ _CATEGORY_DIRS: dict[str, str] = {
 
 def categorize(path: Path) -> str | None:
     """Classify ``path`` into a known offender category, if any."""
-    parts = set(path.parts)
+    parts = path.parts
     for needle, category in _CATEGORY_DIRS.items():
-        if needle in parts or path.name == needle:
+        # Multi-component needles ("Library/Caches") must match as a contiguous run.
+        seq = tuple(needle.split("/"))
+        if any(parts[i : i + len(seq)] == seq for i in range(len(parts) - len(seq) + 1)):
             return category
     if path.suffix in {".log"}:
         return "logs"
@@ -86,8 +94,11 @@ class DiskService:
         for root in roots:
             if not root.is_dir():
                 continue
+            root_dev = self._device(root)
             for child in self._safe_iterdir(root):
-                if not child.is_dir():
+                if child.is_symlink() or not child.is_dir():
+                    continue
+                if self._device(child) != root_dev:
                     continue
                 size = self._dir_size(child)
                 if size < min_size:
@@ -110,29 +121,72 @@ class DiskService:
         except PermissionError, OSError:
             return []
 
+    @staticmethod
+    def _device(path: Path) -> int | None:
+        try:
+            return path.stat().st_dev
+        except OSError:
+            return None
+
+    @staticmethod
+    def _allocated(stat: os.stat_result) -> int:
+        """Bytes actually on disk — a sparse VM image counts what it stores, not its cap."""
+        return stat.st_blocks * _BLOCK_SIZE
+
+    @staticmethod
+    def _walk_one_fs(root: Path, root_dev: int) -> Iterator[tuple[str, list[str]]]:
+        """``os.walk`` that, like ``du -x``, never descends into another mount.
+
+        A mount under the scan root is not local usage, and may not even be local:
+        ``~/Library/Developer/CoreDevice/DeviceFS`` is a live view of an iPhone.
+        """
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+            kept = []
+            for d in dirnames:
+                if d == ".git":
+                    continue
+                try:
+                    if os.lstat(os.path.join(dirpath, d)).st_dev != root_dev:
+                        continue
+                except OSError:
+                    continue
+                kept.append(d)
+            dirnames[:] = kept
+            yield dirpath, filenames
+
     def _iter_files(self, root: Path, *, min_size: int) -> list[tuple[Path, int]]:
         found: list[tuple[Path, int]] = []
-        if not root.exists():
+        root_dev = self._device(root)
+        if root_dev is None:
             return found
-        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-            # Skip into VCS internals which are rarely actionable.
-            dirnames[:] = [d for d in dirnames if d != ".git"]
+        for dirpath, filenames in self._walk_one_fs(root, root_dev):
             for name in filenames:
                 fp = Path(dirpath) / name
                 try:
                     stat = fp.lstat()
                 except OSError, ValueError:
                     continue
-                if stat.st_size >= min_size:
-                    found.append((fp, stat.st_size))
+                size = self._allocated(stat)
+                if size >= min_size:
+                    found.append((fp, size))
         return found
 
     def _dir_size(self, root: Path) -> int:
+        root_dev = self._device(root)
+        if root_dev is None:
+            return 0
         total = 0
-        for dirpath, _dirnames, filenames in os.walk(root, followlinks=False):
+        seen: set[int] = set()
+        for dirpath, filenames in self._walk_one_fs(root, root_dev):
             for name in filenames:
                 try:
-                    total += (Path(dirpath) / name).lstat().st_size
+                    stat = (Path(dirpath) / name).lstat()
                 except OSError, ValueError:
                     continue
+                # Hardlinked files (uv's cache is full of them) count once, as du does.
+                if stat.st_nlink > 1:
+                    if stat.st_ino in seen:
+                        continue
+                    seen.add(stat.st_ino)
+                total += self._allocated(stat)
         return total
