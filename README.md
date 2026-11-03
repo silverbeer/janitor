@@ -159,7 +159,25 @@ jt secrets run -- <command>     # run a command with env resolved from 1Password
 
 jt k3s status                   # nodes + pod health
 jt k3s cleanup                  # delete completed jobs
+jt k3s images                   # runtime images: in use / dangling / stale
+jt k3s prune                    # remove unused dangling images (old pulls, rebuilds)
+jt k3s prune --stale            # + superseded tags of a repo that has one in use
+jt k3s trim                     # fstrim the VM so freed space returns to the host
 ```
+
+**k3s images on Rancher Desktop.** The runtime lives in a VM, reached with
+`rdctl shell`. Two things make cleanup there easy to get wrong:
+
+- **"In use" must include workload specs, not just containers.** A CronJob has
+  no pod between runs; an image only its spec names (often a local build such as
+  `trd:latest`, which can't be re-pulled) would look unused. `jt k3s` reads every
+  Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob and Pod spec from
+  the `rancher-desktop` context (never the *current* context, which may be a
+  remote cluster), and refuses to prune if any query fails.
+- **Deleting inside the VM frees nothing on the Mac** until the VM discards the
+  blocks. Run `jt k3s trim` after a prune. On one Mac mini, prune freed 17 GB
+  inside the VM and the host gained nothing; trim then took the host from 22 to
+  55 GB free.
 
 > `jt secrets run` wraps [varlock](https://varlock.dev/) (`npm install -g varlock`)
 > to resolve secrets from 1Password locally. The cloud path is untouched — varlock

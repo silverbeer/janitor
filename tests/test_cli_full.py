@@ -493,3 +493,101 @@ def test_secrets_doctor_reports_parity(patched_runner: FakeRunner, tmp_path) -> 
     assert result.exit_code == 0
     assert "SUPABASE_KEY" in result.stdout
     assert "in cloud but not in schema" in result.stdout
+
+
+# --- k3s images / prune / trim (SB-1515) -----------------------------------
+
+_K3S_CRICTL = ["rdctl", "shell", "--", "sudo", "k3s", "crictl"]
+
+
+def _stub_k3s_images(fake: FakeRunner, *, empty: bool = False, kubectl_rc: int = 0) -> None:
+    fake.stub(
+        [*_K3S_CRICTL, "images"],
+        stdout=json.dumps(
+            {
+                "images": []
+                if empty
+                else [
+                    {"id": "sha256:used", "repoTags": ["docker.io/library/app:v2"], "size": "10"},
+                    {"id": "sha256:old", "repoTags": ["docker.io/library/app:v1"], "size": "20"},
+                    {"id": "sha256:gone", "repoDigests": ["ghcr.io/x/y@sha256:d"], "size": "30"},
+                ]
+            }
+        ),
+    )
+    fake.stub([*_K3S_CRICTL, "ps"], stdout=json.dumps({"containers": []}))
+    fake.stub(
+        ["kubectl", "--context", "rancher-desktop", "get"],
+        returncode=kubectl_rc,
+        stdout=json.dumps(
+            {"items": [{"spec": {"template": {"spec": {"containers": [{"image": "app:v2"}]}}}}]}
+        ),
+    )
+
+
+@pytest.fixture
+def rancher_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("janitor.services.k3s.which", lambda name: f"/bin/{name}")
+
+
+def test_k3s_images(patched_runner: FakeRunner, rancher_cli: None) -> None:
+    _stub_k3s_images(patched_runner)
+    result = runner.invoke(app, ["k3s", "images"])
+    assert result.exit_code == 0
+    assert "1 dangling" in result.stdout and "adds 1" in result.stdout
+    result = runner.invoke(app, ["k3s", "images", "--stale"])
+    assert "app:v2" not in result.stdout and "app:v1" in result.stdout
+
+
+def test_k3s_prune_dry_run_mutates_nothing(patched_runner: FakeRunner, rancher_cli: None) -> None:
+    _stub_k3s_images(patched_runner)
+    patched_runner.dry_run = True
+    result = runner.invoke(app, ["--dry-run", "k3s", "prune", "--stale"])
+    assert result.exit_code == 0
+    assert "Would remove 2 of 2" in result.stdout
+
+
+def test_k3s_prune_removes_and_suggests_trim(patched_runner: FakeRunner, rancher_cli: None) -> None:
+    _stub_k3s_images(patched_runner)
+    result = runner.invoke(app, ["--yes", "k3s", "prune"])
+    assert result.exit_code == 0
+    assert [*_K3S_CRICTL, "rmi", "sha256:gone"] in patched_runner.calls
+    assert [*_K3S_CRICTL, "rmi", "sha256:old"] not in patched_runner.calls
+    assert "jt k3s trim" in result.stdout
+
+
+def test_k3s_prune_nothing(patched_runner: FakeRunner, rancher_cli: None) -> None:
+    _stub_k3s_images(patched_runner, empty=True)
+    result = runner.invoke(app, ["k3s", "prune"])
+    assert "Nothing to prune" in result.stdout
+
+
+def test_k3s_prune_aborts_on_query_failure(patched_runner: FakeRunner, rancher_cli: None) -> None:
+    _stub_k3s_images(patched_runner, kubectl_rc=1)
+    result = runner.invoke(app, ["--yes", "k3s", "prune"])
+    assert result.exit_code == 1
+    assert not any("rmi" in c for c in patched_runner.calls)
+
+
+def test_k3s_prune_declined(
+    patched_runner: FakeRunner, rancher_cli: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_k3s_images(patched_runner)
+    monkeypatch.setattr("janitor.commands.k3s.confirm", lambda *_a, **_k: False)
+    result = runner.invoke(app, ["k3s", "prune"])
+    assert "Aborted" in result.stdout
+    assert not any("rmi" in c for c in patched_runner.calls)
+
+
+def test_k3s_trim(patched_runner: FakeRunner, rancher_cli: None) -> None:
+    patched_runner.stub(["rdctl", "shell", "--", "sudo", "fstrim"], stdout="/mnt/data: 1 GiB")
+    result = runner.invoke(app, ["k3s", "trim"])
+    assert result.exit_code == 0 and "1 GiB" in result.stdout
+    result = runner.invoke(app, ["--dry-run", "k3s", "trim"])
+    assert "Dry-run" in result.stdout
+
+
+def test_k3s_trim_without_vm(patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("janitor.services.k3s.which", lambda _: None)
+    result = runner.invoke(app, ["k3s", "trim"])
+    assert result.exit_code == 1

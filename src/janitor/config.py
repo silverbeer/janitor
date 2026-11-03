@@ -35,6 +35,7 @@ __all__ = [
     "DiskConfig",
     "DockerConfig",
     "JanitorConfig",
+    "K3sConfig",
     "LogsConfig",
     "SupabaseConfig",
     "SupabaseProjectConfig",
@@ -67,6 +68,34 @@ class DockerConfig(BaseModel):
     prune_build_cache: bool = Field(
         default=True,
         description="Remove build cache during reclaim.",
+    )
+
+
+class K3sConfig(BaseModel):
+    """Where the cluster's container runtime lives and which cluster owns it."""
+
+    node_exec: list[str] | None = Field(
+        default=None,
+        description=(
+            "Prefix that runs a command on the k3s node, e.g. ['rdctl', 'shell', '--', "
+            "'sudo'] for Rancher Desktop's VM. Default: that when `rdctl` is on PATH, "
+            "else run directly (on the node itself)."
+        ),
+    )
+    kube_context: str | None = Field(
+        default=None,
+        description=(
+            "kubectl context whose workloads decide which images are in use. Default: "
+            "'rancher-desktop' with Rancher Desktop, else the current context. Must be "
+            "the cluster that owns the runtime, or every image looks unused."
+        ),
+    )
+    trim_paths: list[str] | None = Field(
+        default=None,
+        description=(
+            "Node mount points `jt k3s trim` discards. Default: ['/mnt/data'] (Rancher "
+            "Desktop's data disk, which also backs /var/lib), else ['/']."
+        ),
     )
 
 
@@ -351,6 +380,7 @@ class JanitorConfig(BaseSettings):
 
     docker: DockerConfig = Field(default_factory=DockerConfig)
     disk: DiskConfig = Field(default_factory=DiskConfig)
+    k3s: K3sConfig = Field(default_factory=K3sConfig)
     logs: LogsConfig = Field(default_factory=LogsConfig)
     supabase: SupabaseConfig = Field(default_factory=SupabaseConfig)
 
