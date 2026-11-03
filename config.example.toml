@@ -13,6 +13,12 @@ log_json = false      # Emit structured JSON logs instead of console output
 prune_volumes = false      # Include volumes in `jt docker prune`
 prune_build_cache = true   # Remove build cache during prune
 
+[k3s]
+# Defaults suit Rancher Desktop; set these for a k3s node reached another way.
+# node_exec = ["rdctl", "shell", "--", "sudo"]   # prefix to run on the node
+# kube_context = "rancher-desktop"                # cluster whose specs mark images in use
+# trim_paths = ["/mnt/data"]                      # mount points `jt k3s trim` discards
+
 [disk]
 scan_paths = ["~/"]        # Roots scanned for large files/dirs
 top_n = 20                 # Default number of entries to report
