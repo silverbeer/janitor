@@ -29,7 +29,10 @@ flowchart TD
 1. **GitHub** deletes the remote branch on merge (`delete_branch_on_merge`, or
    `gh pr merge --delete-branch`).
 2. **Whoever merged** removes their own worktree and local branch immediately —
-   the rule in `~/.claude/CLAUDE.md` ("Clean up the moment a PR merges").
+   the rule in `~/.claude/CLAUDE.md` ("Clean up the moment a PR merges"). For
+   ticket worktrees under `~/.local/state/cycle-runner/worktrees` that is
+   `linear.sh worktree-done SB-N`, which the cycle-runner calls after its own
+   merge (same refusal rules, same artefact list).
 3. **`jt git prune`** sweeps whatever slipped through, nightly.
 
 ## How a verdict is reached
@@ -69,6 +72,11 @@ be deleted until the worktree is gone:
 demand — `.venv`, `node_modules`, caches, `html-report`. A worktree whose only
 untracked files are these is clean. A *tracked* file under such a name is still
 work.
+
+One quirk errs on the safe side: when a whole directory is untracked, git
+reports only the directory (`?? newdir/`), not the `.venv` inside it, so that
+worktree is REVIEW rather than PRUNE. In practice artefacts sit beside tracked
+files (`backend/.venv` in a tracked `backend/`) and are recognised.
 
 ### Safety rules
 
