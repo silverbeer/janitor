@@ -9,9 +9,9 @@ from typer.testing import CliRunner
 
 from janitor.main import app
 from tests.conftest import FakeRunner
+from tests.test_services_git import PRS, REPO, _stub_repo
 
 _real_is_dir = Path.is_dir
-from tests.test_services_git import PRS, REPO, _stub_repo
 
 runner = CliRunner()
 pytestmark = pytest.mark.integration
