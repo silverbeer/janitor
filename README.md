@@ -25,6 +25,7 @@ homelab operators.
 | `jt supabase` | Discover local projects, show status, timestamped backups + retention/size hygiene |
 | `jt secrets`  | Shared Varlock + 1Password secret resolution (one schema convention across repos) |
 | `jt k3s`      | Cluster/node/pod health, clean up completed jobs |
+| `jt git`      | Delete merged branches, remove merged worktrees, daily via launchd |
 
 Every destructive command honours **`--dry-run`** (preview) and **`--yes`**
 (automation), and prompts for confirmation otherwise. Both are **global** flags —
@@ -163,7 +164,21 @@ jt k3s images                   # runtime images: in use / dangling / stale
 jt k3s prune                    # remove unused dangling images (old pulls, rebuilds)
 jt k3s prune --stale            # + superseded tags of a repo that has one in use
 jt k3s trim                     # fstrim the VM so freed space returns to the host
+
+jt git audit                    # every repo under ~/gitrepos: what's prunable, what needs a human
+jt git audit --repo .           # just the repo you're in (works inside a worktree)
+jt git prune                    # delete merged branches + remove merged, clean worktrees
+jt --dry-run git prune          # preview
+jt git schedule install         # run `jt --yes git prune` daily at 03:30 (launchd)
+jt git schedule status          # loaded? what did the last run do?
 ```
+
+**`jt git` never deletes work that exists nowhere else.** A branch goes only
+when its PR is merged *and* nothing was committed locally after; a worktree goes
+only when it is unlocked, on such a branch, and has no changes except build
+artefacts (`.venv`, `node_modules`…). Closed-unmerged PRs, commits after merge
+and dirty worktrees are listed as **REVIEW** every run and left alone. Rules,
+diagram and when to run it: [docs/git-hygiene.md](./docs/git-hygiene.md).
 
 **k3s images on Rancher Desktop.** The runtime lives in a VM, reached with
 `rdctl shell`. Two things make cleanup there easy to get wrong:

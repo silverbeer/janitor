@@ -145,3 +145,16 @@ data_schemas    = ["public"]
 
 The config key is what every command takes (`jt supabase backup <key>`), so it
 can differ from the folder name — that is why `path` exists.
+
+## `jt git` — branch and worktree hygiene
+
+Full rules and diagrams: [docs/git-hygiene.md](docs/git-hygiene.md).
+
+- The decision is two pure functions in `services/git.py`
+  (`classify_branch`, `classify_worktree`). **Any change to them needs a test in
+  `tests/test_services_git.py` proving nothing with unsaved work becomes PRUNE.**
+- PR state comes from one `gh pr list --state all` per repo — never infer
+  "merged" from `git branch --merged` (squash merges never look merged).
+- A scan error (fetch, gh) blocks pruning that whole repo. Keep it that way.
+- The schedule is a LaunchAgent in the GUI domain so `gh` can reach the
+  keychain. `jt git schedule install` regenerates the plist; never hand-edit it.

@@ -69,3 +69,16 @@ default = "fan123"
 # list, so `jt supabase sync-users stk` syncs exactly these users.
 # [supabase.projects.stk.user_passwords]
 # "you@example.com" = "letmein"
+
+[git]
+# `jt git audit|prune` — merged branch and worktree hygiene. See docs/git-hygiene.md.
+roots = ["~/gitrepos"]             # immediate children with a .git dir are scanned
+exclude_repos = []                 # folder names to skip
+protected_branches = ["main", "master", "develop"]
+protected_paths = []               # worktrees at/under these are never removed
+# artifacts = [".venv", "node_modules", ...]  # untracked names that don't count as work
+# state_file = "~/.janitor/state/git-prune.json"
+# log_file = "~/Library/Logs/janitor/git-prune.log"
+schedule_hour = 3                  # `jt git schedule install` runs daily at 03:30
+schedule_minute = 30
+stale_after_days = 3               # `jt doctor` warns when the last prune is older

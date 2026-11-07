@@ -86,3 +86,12 @@ def make_runner() -> Callable[..., FakeRunner]:
         return FakeRunner(dry_run=dry_run)
 
     return factory
+
+
+@pytest.fixture(autouse=True)
+def _isolated_git_state(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Never let a test read or write the machine's real `jt git` state file."""
+    state = tmp_path_factory.mktemp("git-state") / "git-prune.json"
+    monkeypatch.setenv("JANITOR_GIT__STATE_FILE", str(state))

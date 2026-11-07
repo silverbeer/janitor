@@ -34,6 +34,7 @@ ExpandedPath = Annotated[Path, AfterValidator(lambda p: p.expanduser())]
 __all__ = [
     "DiskConfig",
     "DockerConfig",
+    "GitConfig",
     "JanitorConfig",
     "K3sConfig",
     "LogsConfig",
@@ -360,6 +361,62 @@ class SupabaseConfig(BaseModel):
         return self.role_passwords.get("default", "fan123")
 
 
+class GitConfig(BaseModel):
+    """`jt git` — merged branch and worktree hygiene (SB-1580)."""
+
+    roots: list[ExpandedPath] = Field(
+        default_factory=lambda: [Path.home() / "gitrepos"],
+        description="Directories whose immediate children are scanned for git repos.",
+    )
+    exclude_repos: list[str] = Field(
+        default_factory=list,
+        description="Repo folder names to skip entirely.",
+    )
+    protected_branches: list[str] = Field(
+        default_factory=lambda: ["main", "master", "develop"],
+        description="Never deleted, whatever their PR state.",
+    )
+    protected_paths: list[ExpandedPath] = Field(
+        default_factory=list,
+        description="Worktrees at or under these paths are never removed.",
+    )
+    artifacts: list[str] = Field(
+        default_factory=lambda: [
+            ".venv",
+            "node_modules",
+            "__pycache__",
+            ".pytest_cache",
+            ".ruff_cache",
+            ".mypy_cache",
+            ".coverage",
+            "htmlcov",
+            "html-report",
+            "test-results.json",
+            "dist",
+            "build",
+        ],
+        description=(
+            "Untracked path names that are rebuildable build output, not work. A "
+            "worktree whose only untracked files are these still counts as clean."
+        ),
+    )
+    state_file: ExpandedPath = Field(
+        default_factory=lambda: Path.home() / ".janitor" / "state" / "git-prune.json",
+        description="Last real `jt git prune` run, read by `jt doctor`.",
+    )
+    log_file: ExpandedPath = Field(
+        default_factory=lambda: Path.home() / "Library" / "Logs" / "janitor" / "git-prune.log",
+        description="Where the scheduled run writes its output.",
+    )
+    schedule_hour: int = Field(default=3, ge=0, le=23, description="Daily run hour (local).")
+    schedule_minute: int = Field(default=30, ge=0, le=59, description="Daily run minute.")
+    stale_after_days: int = Field(
+        default=3,
+        ge=1,
+        description="`jt doctor` warns when the last real prune is older than this.",
+    )
+
+
 class JanitorConfig(BaseSettings):
     """Top-level Janitor configuration.
 
@@ -383,6 +440,7 @@ class JanitorConfig(BaseSettings):
     k3s: K3sConfig = Field(default_factory=K3sConfig)
     logs: LogsConfig = Field(default_factory=LogsConfig)
     supabase: SupabaseConfig = Field(default_factory=SupabaseConfig)
+    git: GitConfig = Field(default_factory=GitConfig)
 
     #: TOML values seeded by :func:`load_config`. Class-level so the source
     #: callable below can read them without threading state through ``__init__``.
