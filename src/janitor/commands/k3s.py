@@ -2,17 +2,32 @@
 
 from __future__ import annotations
 
+import sys
+
 import typer
 from rich.table import Table
 
 from janitor.context import AppState
-from janitor.models.k3s import K3sImage
-from janitor.services.k3s import K3sQueryError, K3sService
+from janitor.models.k3s import K3sImage, K3sMaintainResult
+from janitor.services.k3s import (
+    K3sQueryError,
+    K3sService,
+    load_maintain_result,
+    save_maintain_result,
+)
+from janitor.services.schedule import LaunchAgent, build_plist
+from janitor.services.shell import which
 from janitor.utils.console import console, err_console
 from janitor.utils.format import format_bytes
 from janitor.utils.prompt import confirm
 
 app = typer.Typer(no_args_is_help=True, help="Kubernetes / k3s cluster housekeeping.")
+
+schedule_app = typer.Typer(no_args_is_help=True, help="Run `jt k3s maintain` weekly via launchd.")
+app.add_typer(schedule_app, name="schedule")
+
+LAUNCHD_LABEL = "com.silverbeer.janitor.k3s-maintain"
+WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 
 STALE_HELP = "Also superseded tagged images: unused while another image of the repo is in use."
 
@@ -218,3 +233,107 @@ def cleanup(ctx: typer.Context) -> None:
     console.print(f"[ok]{verb} {len(deleted)} job(s):[/]")
     for name in deleted:
         console.print(f"  [muted]{name}[/muted]")
+
+
+# ---------------------------------------------------------------- maintain
+
+
+def _summary(result: K3sMaintainResult) -> str:
+    return (
+        f"{result.images_removed} image(s) ({format_bytes(result.image_bytes)}), "
+        f"{format_bytes(result.build_cache_freed)} build cache; "
+        f"{len(result.failures)} failure(s)"
+    )
+
+
+@app.command()
+def maintain(ctx: typer.Context) -> None:
+    """Unattended upkeep: prune dangling images + build cache, then trim the VM.
+
+    What the weekly schedule runs. Never removes `--stale` images. Each step
+    runs even if an earlier one failed; the result is recorded for `jt doctor`.
+    """
+    state: AppState = ctx.obj
+    if not state.dry_run and not confirm(
+        "Prune dangling images and build cache, then trim the VM?", assume_yes=state.assume_yes
+    ):
+        console.print("[muted]Aborted.[/muted]")
+        raise typer.Exit(code=0)
+    with console.status("[info]Maintaining k3s node...", spinner="dots"):
+        result = _service(state).maintain()
+    save_maintain_result(result, state.config.k3s.state_file)
+    verb = "Would free" if result.dry_run else "Freed"
+    console.print(f"[ok]{verb}:[/] {_summary(result)}")
+    if result.trim:
+        console.print(f"[muted]{result.trim}[/muted]")
+    for line in result.failures:
+        err_console.print(f"[err]✗ {line}[/]")
+    if result.failures:
+        raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------- schedule
+
+
+def _when(state: AppState) -> str:
+    cfg = state.config.k3s
+    return (
+        f"weekly on {WEEKDAYS[cfg.schedule_weekday]} at "
+        f"{cfg.schedule_hour:02d}:{cfg.schedule_minute:02d}"
+    )
+
+
+@schedule_app.command("install")
+def schedule_install(ctx: typer.Context) -> None:
+    """Install (or refresh) the weekly `jt --yes k3s maintain` LaunchAgent."""
+    state: AppState = ctx.obj
+    cfg = state.config.k3s
+    if sys.platform != "darwin":
+        console.print("[err]launchd scheduling is macOS-only.[/]")
+        raise typer.Exit(code=1)
+    jt = which("jt")
+    if jt is None:
+        console.print("[err]`jt` is not on PATH — install it with `uv tool install` first.[/]")
+        raise typer.Exit(code=1)
+    agent = LaunchAgent(state.runner, LAUNCHD_LABEL)
+    plist = build_plist(
+        label=LAUNCHD_LABEL,
+        program=[jt, "--yes", "k3s", "maintain"],
+        weekday=cfg.schedule_weekday,
+        hour=cfg.schedule_hour,
+        minute=cfg.schedule_minute,
+        log_file=cfg.log_file,
+    )
+    if not agent.install(plist, log_file=cfg.log_file):
+        console.print("[err]launchctl refused the job — see `launchctl print`.[/]")
+        raise typer.Exit(code=1)
+    console.print(
+        f"[ok]Scheduled {_when(state)}.[/] [muted]{agent.plist_path} → log {cfg.log_file}[/muted]"
+    )
+
+
+@schedule_app.command("status")
+def schedule_status(ctx: typer.Context) -> None:
+    """Show whether the job is loaded and what the last real run did."""
+    state: AppState = ctx.obj
+    cfg = state.config.k3s
+    agent = LaunchAgent(state.runner, LAUNCHD_LABEL)
+    loaded = agent.loaded()
+    console.print(
+        f"LaunchAgent: {'[ok]loaded[/]' if loaded else '[warn]not loaded[/]'} "
+        f"[muted]({agent.plist_path})[/muted]"
+    )
+    console.print(f"Runs {_when(state)}; log {cfg.log_file}")
+    last = load_maintain_result(cfg.state_file)
+    if last is None:
+        console.print("[warn]No recorded run yet.[/]")
+        return
+    console.print(f"Last run {last.ran_at}: {_summary(last)}.")
+
+
+@schedule_app.command("uninstall")
+def schedule_uninstall(ctx: typer.Context) -> None:
+    """Remove the LaunchAgent."""
+    state: AppState = ctx.obj
+    removed = LaunchAgent(state.runner, LAUNCHD_LABEL).uninstall()
+    console.print("[ok]Removed.[/]" if removed else "[muted]Nothing was installed.[/muted]")

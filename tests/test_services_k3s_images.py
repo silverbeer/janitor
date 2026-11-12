@@ -320,3 +320,109 @@ def test_prune_build_cache_failure_raises(fake_runner: FakeRunner, rancher: None
     fake_runner.stub([*BUILDCTL, "prune"], returncode=1, stderr="boom")
     with pytest.raises(K3sQueryError, match="boom"):
         K3sService(runner=fake_runner).prune_build_cache()
+
+
+# --- maintain + state (SB-1632) ------------------------------------------------
+
+from datetime import UTC, datetime, timedelta  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from janitor.models.k3s import K3sMaintainResult  # noqa: E402
+from janitor.services.k3s import (  # noqa: E402
+    last_maintain_age_days,
+    load_maintain_result,
+    save_maintain_result,
+)
+from janitor.services.schedule import build_plist  # noqa: E402
+
+FSTRIM = [*RANCHER_EXEC, "fstrim"]
+
+
+def test_maintain_runs_every_step(fake_runner: FakeRunner, rancher: None) -> None:
+    _stub(fake_runner)
+    fake_runner.stub([*BUILDCTL, "du"], stdout=DU)
+    fake_runner.stub([*BUILDCTL, "prune"], stdout='{"size": 1250}\n')
+    fake_runner.stub(FSTRIM, stdout="/mnt/data: 2 GiB trimmed")
+    result = K3sService(runner=fake_runner).maintain()
+    assert result.failures == []
+    assert result.images_removed == 1  # "oldpull": the only dangling, unused image
+    assert result.build_cache_freed == 1250
+    assert "2 GiB" in result.trim
+    assert not any("rmi" in c and "sha256:workerold" in c for c in fake_runner.calls), (
+        "maintain must never take --stale images"
+    )
+
+
+def test_maintain_continues_past_a_failed_image_query(
+    fake_runner: FakeRunner, rancher: None
+) -> None:
+    """Cluster down must not stop the build-cache prune or the trim."""
+    _stub(fake_runner, fail="get")
+    fake_runner.stub([*BUILDCTL, "du"], stdout=DU)
+    fake_runner.stub([*BUILDCTL, "prune"], stdout='{"size": 1250}\n')
+    result = K3sService(runner=fake_runner).maintain()
+    assert result.images_removed == 0
+    assert result.build_cache_freed == 1250
+    assert [f.split(":")[0] for f in result.failures] == ["images"]
+    assert any("fstrim" in c for c in fake_runner.calls)
+    assert not any("rmi" in c for c in fake_runner.calls)
+
+
+def test_maintain_records_buildkit_and_trim_failures(
+    fake_runner: FakeRunner, rancher: None
+) -> None:
+    _stub(fake_runner)
+    fake_runner.stub([*BUILDCTL, "du"], returncode=1)
+    fake_runner.stub(FSTRIM, returncode=1, stderr="busy")
+    result = K3sService(runner=fake_runner).maintain()
+    assert [f.split(":")[0] for f in result.failures] == ["build cache", "trim"]
+
+
+def test_maintain_records_build_cache_prune_failure(fake_runner: FakeRunner, rancher: None) -> None:
+    _stub(fake_runner)
+    fake_runner.stub([*BUILDCTL, "du"], stdout=DU)
+    fake_runner.stub([*BUILDCTL, "prune"], returncode=1, stderr="boom")
+    result = K3sService(runner=fake_runner).maintain()
+    assert any(f.startswith("build cache: buildctl prune failed") for f in result.failures)
+
+
+def test_maintain_skips_empty_cache_and_vm_steps_without_vm(
+    fake_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare node (no rdctl, no buildkit_addr): images only, no buildctl/fstrim."""
+    monkeypatch.setattr("janitor.services.k3s.which", lambda _: None)
+    fake_runner.stub(["k3s", "crictl", "images"], stdout=json.dumps({"images": []}))
+    fake_runner.stub(["k3s", "crictl", "ps"], stdout=json.dumps({"containers": []}))
+    fake_runner.stub(["kubectl", "get"], stdout=json.dumps({"items": []}))
+    result = K3sService(runner=fake_runner).maintain()
+    assert result.failures == []
+    assert not any("buildctl" in c or "fstrim" in c for c in fake_runner.calls)
+
+
+def test_maintain_result_round_trip(tmp_path: Path) -> None:
+    path = tmp_path / "state" / "k3s.json"
+    assert load_maintain_result(path) is None
+    assert last_maintain_age_days(path) is None
+    save_maintain_result(K3sMaintainResult(ran_at="x", dry_run=True), path)
+    assert not path.exists(), "dry runs are never saved"
+    ran = datetime.now(UTC) - timedelta(days=2)
+    save_maintain_result(K3sMaintainResult(ran_at=ran.isoformat(), build_cache_freed=7), path)
+    loaded = load_maintain_result(path)
+    assert loaded is not None and loaded.build_cache_freed == 7
+    age = last_maintain_age_days(path)
+    assert age is not None and 1.9 < age < 2.1
+    save_maintain_result(K3sMaintainResult(ran_at="not a date"), path)
+    assert last_maintain_age_days(path) is None
+
+
+def test_build_plist_weekly() -> None:
+    import plistlib
+
+    weekly = plistlib.loads(
+        build_plist(label="x", program=["jt"], hour=4, minute=0, log_file=Path("/l"), weekday=0)
+    )
+    assert weekly["StartCalendarInterval"] == {"Hour": 4, "Minute": 0, "Weekday": 0}
+    daily = plistlib.loads(
+        build_plist(label="x", program=["jt"], hour=4, minute=0, log_file=Path("/l"))
+    )
+    assert "Weekday" not in daily["StartCalendarInterval"]

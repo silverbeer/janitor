@@ -10,7 +10,7 @@ from janitor.context import AppState
 from janitor.models.common import HealthStatus
 from janitor.services.disk import DiskService
 from janitor.services.git import last_run_age_days, load_result
-from janitor.services.k3s import K3sService
+from janitor.services.k3s import K3sService, last_maintain_age_days, load_maintain_result
 from janitor.services.system import SystemService
 from janitor.utils.console import console
 from janitor.utils.format import format_bytes
@@ -112,6 +112,29 @@ def doctor(ctx: typer.Context) -> None:
             "k3s build cache",
             f"[{cache_health.style}]{cache_health.icon} {cache_health.value}[/]",
             cache_detail,
+        )
+
+        # Weekly schedule (SB-1632): read the last recorded run, like git hygiene.
+        k3s_cfg = state.config.k3s
+        m_age = last_maintain_age_days(k3s_cfg.state_file)
+        m_last = load_maintain_result(k3s_cfg.state_file)
+        if m_age is None or m_last is None:
+            m_health = HealthStatus.UNKNOWN
+            m_detail = "no recorded run — `jt k3s schedule install`"
+        else:
+            m_stale = m_age > k3s_cfg.stale_after_days
+            m_health = HealthStatus.WARN if m_stale or m_last.failures else HealthStatus.OK
+            m_detail = f"last run {m_age:.1f}d ago: " + (
+                f"{len(m_last.failures)} failure(s) — see {k3s_cfg.log_file}"
+                if m_last.failures
+                else f"{format_bytes(m_last.build_cache_freed)} build cache freed"
+            )
+        if m_health is HealthStatus.WARN and worst is HealthStatus.OK:
+            worst = HealthStatus.WARN
+        table.add_row(
+            "k3s upkeep",
+            f"[{m_health.style}]{m_health.icon} {m_health.value}[/]",
+            m_detail,
         )
 
     console.print(table)

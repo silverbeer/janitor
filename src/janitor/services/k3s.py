@@ -3,13 +3,30 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from janitor.config import K3sConfig
-from janitor.models.k3s import BuildCache, K3sImage, K3sNode, K3sPod, K3sStatus, repository_of
+from janitor.models.k3s import (
+    BuildCache,
+    K3sImage,
+    K3sMaintainResult,
+    K3sNode,
+    K3sPod,
+    K3sStatus,
+    repository_of,
+)
 from janitor.services.shell import ShellRunner, which
 
-__all__ = ["K3sQueryError", "K3sService", "normalize_image_ref"]
+__all__ = [
+    "K3sQueryError",
+    "K3sService",
+    "last_maintain_age_days",
+    "load_maintain_result",
+    "normalize_image_ref",
+    "save_maintain_result",
+]
 
 RANCHER_EXEC = ["rdctl", "shell", "--", "sudo"]
 RANCHER_CONTEXT = "rancher-desktop"
@@ -256,6 +273,43 @@ class K3sService:
             lines.append(result.stdout.strip())
         return "\n".join(line for line in lines if line)
 
+    # --- unattended maintenance (SB-1632) --------------------------------------
+
+    def maintain(self) -> K3sMaintainResult:
+        """Safe prune + build cache + trim, for the weekly schedule. Honors dry-run.
+
+        Each step runs on its own: a failed image query (cluster down) must not
+        stop the build-cache prune, and trim always runs last so whatever was
+        freed reaches the host. Only dangling images go — never ``--stale``,
+        which is a judgement call for a human.
+        """
+        result = K3sMaintainResult(
+            ran_at=datetime.now(UTC).isoformat(timespec="seconds"),
+            dry_run=self.runner.dry_run,
+        )
+        try:
+            targets = [i for i in self.images() if i.prunable(stale=False)]
+            removed = self.remove_images(targets)
+            result.images_removed = len(removed)
+            result.image_bytes = sum(i.size for i in removed)
+        except K3sQueryError as exc:
+            result.failures.append(f"images: {exc}")
+        if self.buildkit_addr is not None:
+            cache = self.build_cache()
+            if cache is None:
+                result.failures.append("build cache: buildkitd unreachable")
+            elif cache.reclaimable:
+                try:
+                    result.build_cache_freed = self.prune_build_cache()
+                except K3sQueryError as exc:
+                    result.failures.append(f"build cache: {exc}")
+        if self.node_exec:
+            try:
+                result.trim = self.trim()
+            except K3sQueryError as exc:
+                result.failures.append(f"trim: {exc}")
+        return result
+
     # --- cluster health --------------------------------------------------------
 
     def is_available(self) -> bool:
@@ -363,3 +417,31 @@ class K3sService:
             return json.loads(text)  # type: ignore[no-any-return]
         except json.JSONDecodeError:
             return {}
+
+
+def save_maintain_result(result: K3sMaintainResult, path: Path) -> None:
+    """Persist the last real run for `jt doctor`. Dry runs are never saved."""
+    if result.dry_run:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(result.model_dump_json(indent=2))
+
+
+def load_maintain_result(path: Path) -> K3sMaintainResult | None:
+    """The last saved run, or None when there is none (or it is unreadable)."""
+    try:
+        return K3sMaintainResult.model_validate_json(path.read_text())
+    except OSError, ValueError:
+        return None
+
+
+def last_maintain_age_days(path: Path, *, now: datetime | None = None) -> float | None:
+    """Days since the last recorded real run, or None when there is none."""
+    last = load_maintain_result(path)
+    if last is None:
+        return None
+    try:
+        ran = datetime.fromisoformat(last.ran_at)
+    except ValueError:
+        return None
+    return ((now or datetime.now(UTC)) - ran).total_seconds() / 86400

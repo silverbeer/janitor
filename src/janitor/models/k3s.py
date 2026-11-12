@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-__all__ = ["BuildCache", "K3sImage", "K3sNode", "K3sPod", "K3sStatus"]
+__all__ = ["BuildCache", "K3sImage", "K3sMaintainResult", "K3sNode", "K3sPod", "K3sStatus"]
 
 
 class K3sNode(BaseModel):
@@ -109,6 +109,20 @@ class BuildCache(BaseModel):
     """Bytes held by every cache record."""
     reclaimable: int = 0
     """Bytes in records no running build is using — what ``prune`` frees."""
+
+
+class K3sMaintainResult(BaseModel):
+    """Outcome of one `jt k3s maintain` run, also persisted for `jt doctor`."""
+
+    ran_at: str
+    dry_run: bool = False
+    images_removed: int = 0
+    image_bytes: int = 0
+    """Compressed size of removed images (the disk freed is larger)."""
+    build_cache_freed: int = 0
+    trim: str = ""
+    """``fstrim -v`` output: what the VM gave back to the host."""
+    failures: list[str] = Field(default_factory=list)
 
 
 def repository_of(ref: str) -> str:
