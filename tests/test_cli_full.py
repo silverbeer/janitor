@@ -579,6 +579,62 @@ def test_k3s_prune_declined(
     assert not any("rmi" in c for c in patched_runner.calls)
 
 
+_BUILDCTL = ["rdctl", "shell", "--", "sudo", "buildctl"]
+_DU = json.dumps([{"size": 3 * 1024**3, "inUse": False}, {"size": 100, "inUse": True}])
+
+
+def test_k3s_images_reports_build_cache(patched_runner: FakeRunner, rancher_cli: None) -> None:
+    _stub_k3s_images(patched_runner)
+    patched_runner.stub(_BUILDCTL, stdout=_DU)
+    result = runner.invoke(app, ["k3s", "images"], env={"COLUMNS": "200"})
+    assert "BuildKit build cache" in result.stdout and "2 record(s)" in result.stdout
+
+
+def test_k3s_prune_drops_build_cache(patched_runner: FakeRunner, rancher_cli: None) -> None:
+    """SB-1631: 54 GB of build cache sat beside 0.3 GB of dangling images, unseen."""
+    _stub_k3s_images(patched_runner, empty=True)
+    patched_runner.stub([*_BUILDCTL, "--addr"], stdout=_DU)
+    patched_runner.stub(
+        [*_BUILDCTL, "--addr", "unix:///run/buildkit/buildkitd.sock", "prune"],
+        stdout=json.dumps({"size": 3 * 1024**3}),
+    )
+    result = runner.invoke(app, ["--yes", "k3s", "prune"], env={"COLUMNS": "200"})
+    assert result.exit_code == 0, result.stdout
+    assert any("prune" in c and "buildctl" in c for c in patched_runner.calls)
+    assert "Removed 3.0 GB of build cache" in result.stdout
+    assert "jt k3s trim" in result.stdout
+
+
+def test_k3s_prune_build_cache_dry_run(patched_runner: FakeRunner, rancher_cli: None) -> None:
+    _stub_k3s_images(patched_runner, empty=True)
+    patched_runner.stub(_BUILDCTL, stdout=_DU)
+    patched_runner.dry_run = True
+    result = runner.invoke(app, ["--dry-run", "k3s", "prune"], env={"COLUMNS": "200"})
+    assert result.exit_code == 0
+    assert "Would remove 3.0 GB of build cache" in result.stdout
+    assert "jt k3s trim" not in result.stdout
+
+
+def test_k3s_prune_no_build_cache_flag(patched_runner: FakeRunner, rancher_cli: None) -> None:
+    _stub_k3s_images(patched_runner, empty=True)
+    patched_runner.stub(_BUILDCTL, stdout=_DU)
+    result = runner.invoke(app, ["--yes", "k3s", "prune", "--no-build-cache"])
+    assert "Nothing to prune" in result.stdout
+    assert not any("buildctl" in c for c in patched_runner.calls)
+
+
+def test_k3s_prune_build_cache_failure(patched_runner: FakeRunner, rancher_cli: None) -> None:
+    _stub_k3s_images(patched_runner, empty=True)
+    patched_runner.stub([*_BUILDCTL, "--addr"], stdout=_DU)
+    patched_runner.stub(
+        [*_BUILDCTL, "--addr", "unix:///run/buildkit/buildkitd.sock", "prune"],
+        returncode=1,
+        stderr="buildkitd gone",
+    )
+    result = runner.invoke(app, ["--yes", "k3s", "prune"])
+    assert result.exit_code == 1
+
+
 def test_k3s_trim(patched_runner: FakeRunner, rancher_cli: None) -> None:
     patched_runner.stub(["rdctl", "shell", "--", "sudo", "fstrim"], stdout="/mnt/data: 1 GiB")
     result = runner.invoke(app, ["k3s", "trim"])

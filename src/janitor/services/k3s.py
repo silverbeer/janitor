@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from janitor.config import K3sConfig
-from janitor.models.k3s import K3sImage, K3sNode, K3sPod, K3sStatus, repository_of
+from janitor.models.k3s import BuildCache, K3sImage, K3sNode, K3sPod, K3sStatus, repository_of
 from janitor.services.shell import ShellRunner, which
 
 __all__ = ["K3sQueryError", "K3sService", "normalize_image_ref"]
@@ -15,6 +15,8 @@ RANCHER_EXEC = ["rdctl", "shell", "--", "sudo"]
 RANCHER_CONTEXT = "rancher-desktop"
 #: Rancher Desktop's data disk; /var/lib (containerd) is a bind of it.
 RANCHER_TRIM_PATHS = ["/mnt/data"]
+#: buildkitd inside Rancher Desktop's VM (serves ``nerdctl build``).
+RANCHER_BUILDKIT_ADDR = "unix:///run/buildkit/buildkitd.sock"
 #: Workload kinds whose pod templates name images. CronJobs matter most: between
 #: runs they have no pod and no container, so only the spec says the image is needed.
 WORKLOAD_KINDS = "deployments,statefulsets,daemonsets,replicasets,jobs,cronjobs,pods"
@@ -164,6 +166,74 @@ class K3sService:
             if result.ok:
                 removed.append(image)
         return removed
+
+    # --- build cache (BuildKit) ------------------------------------------------
+
+    @property
+    def buildkit_addr(self) -> str | None:
+        if self.config.buildkit_addr:
+            return self.config.buildkit_addr
+        return RANCHER_BUILDKIT_ADDR if self.is_rancher else None
+
+    def _buildctl(self, *args: str) -> list[str] | None:
+        addr = self.buildkit_addr
+        if addr is None or not self.node_exec:
+            return None
+        return [*self.node_exec, "buildctl", "--addr", addr, *args]
+
+    def build_cache(self) -> BuildCache | None:
+        """Size of the node's BuildKit cache, or ``None`` when it can't be read.
+
+        ``None`` (no buildkitd configured, VM stopped, socket missing) is not an
+        error: build cache is optional, and image pruning must not depend on it.
+        """
+        command = self._buildctl("du", "--format", "json")
+        if command is None:
+            return None
+        result = self.runner.run(command, timeout=60)
+        if not result.ok:
+            return None
+        try:
+            records = json.loads(result.stdout or "null") or []
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(records, list):
+            return None
+        sizes = [(int(r.get("size") or 0), bool(r.get("inUse"))) for r in records]
+        return BuildCache(
+            records=len(sizes),
+            total=sum(size for size, _ in sizes),
+            reclaimable=sum(size for size, in_use in sizes if not in_use),
+        )
+
+    def prune_build_cache(self) -> int:
+        """``buildctl prune --all``: drop every unused cache record. Honors dry-run.
+
+        Pure cache — the only cost is a slower next local build. Records an
+        in-flight build holds are kept by buildkitd itself.
+
+        Returns:
+            Bytes freed (0 in dry-run).
+
+        Raises:
+            K3sQueryError: if no buildkitd is configured or the prune fails.
+        """
+        command = self._buildctl("prune", "--all", "--format", "json")
+        if command is None:
+            raise K3sQueryError("no buildkitd on the node (set k3s.buildkit_addr)")
+        result = self.runner.run(command, mutating=True, timeout=600)
+        if not result.ok:
+            detail = (result.stderr or result.stdout).strip()[:200]
+            raise K3sQueryError(f"buildctl prune failed: {detail}")
+        freed = 0
+        for line in result.stdout.splitlines():
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(record, dict):
+                freed += int(record.get("size") or 0)
+        return freed
 
     def trim(self) -> str:
         """``fstrim`` the node's filesystems so freed blocks go back to the host.

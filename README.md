@@ -160,8 +160,9 @@ jt secrets run -- <command>     # run a command with env resolved from 1Password
 
 jt k3s status                   # nodes + pod health
 jt k3s cleanup                  # delete completed jobs
-jt k3s images                   # runtime images: in use / dangling / stale
-jt k3s prune                    # remove unused dangling images (old pulls, rebuilds)
+jt k3s images                   # runtime images: in use / dangling / stale (+ build cache size)
+jt k3s prune                    # remove unused dangling images + BuildKit build cache
+jt k3s prune --no-build-cache   # images only
 jt k3s prune --stale            # + superseded tags of a repo that has one in use
 jt k3s trim                     # fstrim the VM so freed space returns to the host
 
@@ -193,6 +194,12 @@ diagram and when to run it: [docs/git-hygiene.md](./docs/git-hygiene.md).
   blocks. Run `jt k3s trim` after a prune. On one Mac mini, prune freed 17 GB
   inside the VM and the host gained nothing; trim then took the host from 22 to
   55 GB free.
+- **Local builds leave cache the image list never shows.** `nerdctl build`
+  stores its layers in BuildKit's own containerd namespace, outside the CRI, so
+  `crictl images` can look tidy while the cache grows. On 2026-11-11 it reached
+  54 GB and filled the Mac. `jt k3s prune` now drops it (`buildctl prune --all`;
+  the cost is a slower next build), `jt k3s images` reports it, and `jt doctor`
+  warns above `k3s.build_cache_warn_gb` (default 20).
 
 > `jt secrets run` wraps [varlock](https://varlock.dev/) (`npm install -g varlock`)
 > to resolve secrets from 1Password locally. The cloud path is untouched — varlock

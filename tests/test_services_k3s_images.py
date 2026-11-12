@@ -236,3 +236,87 @@ def test_image_reference_forms() -> None:
         K3sImage(id="sha256:1", digests=["r/a@sha256:" + "b" * 64]).reference == "r/a@bbbbbbbbbbbb"
     )
     assert K3sImage(id="sha256:" + "c" * 64).reference == "c" * 12
+
+
+# --- BuildKit build cache (SB-1631) ------------------------------------------
+
+BUILDCTL = [*RANCHER_EXEC, "buildctl", "--addr", "unix:///run/buildkit/buildkitd.sock"]
+DU = json.dumps(
+    [
+        {"id": "a", "size": 1000, "inUse": False},
+        {"id": "b", "size": 500, "inUse": True},
+        {"id": "c", "size": 250, "inUse": False},
+    ]
+)
+
+
+def test_build_cache_sums_reclaimable_excluding_in_use(
+    fake_runner: FakeRunner, rancher: None
+) -> None:
+    fake_runner.stub([*BUILDCTL, "du"], stdout=DU)
+    cache = K3sService(runner=fake_runner).build_cache()
+    assert cache is not None
+    assert (cache.records, cache.total, cache.reclaimable) == (3, 1750, 1250)
+
+
+def test_build_cache_empty_is_null(fake_runner: FakeRunner, rancher: None) -> None:
+    fake_runner.stub([*BUILDCTL, "du"], stdout="null\n")
+    cache = K3sService(runner=fake_runner).build_cache()
+    assert cache is not None and cache.reclaimable == 0
+
+
+@pytest.mark.parametrize(
+    "stub",
+    [{"returncode": 1, "stderr": "no such socket"}, {"stdout": "not json"}, {"stdout": '{"a": 1}'}],
+)
+def test_build_cache_unreadable_is_none(
+    fake_runner: FakeRunner, rancher: None, stub: dict[str, object]
+) -> None:
+    fake_runner.stub([*BUILDCTL, "du"], **stub)  # type: ignore[arg-type]
+    assert K3sService(runner=fake_runner).build_cache() is None
+
+
+def test_build_cache_skipped_without_buildkit(
+    fake_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No rdctl and no buildkit_addr: never shell out, never raise."""
+    monkeypatch.setattr("janitor.services.k3s.which", lambda _: None)
+    service = K3sService(runner=fake_runner)
+    assert service.buildkit_addr is None
+    assert service.build_cache() is None
+    assert fake_runner.calls == []
+    with pytest.raises(K3sQueryError, match="no buildkitd"):
+        service.prune_build_cache()
+
+
+def test_build_cache_addr_from_config(fake_runner: FakeRunner) -> None:
+    config = K3sConfig(node_exec=["ssh", "node"], buildkit_addr="tcp://127.0.0.1:1234")
+    fake_runner.stub(["ssh", "node", "buildctl"], stdout="[]")
+    K3sService(runner=fake_runner, config=config).build_cache()
+    assert fake_runner.calls[-1][:5] == [
+        "ssh",
+        "node",
+        "buildctl",
+        "--addr",
+        "tcp://127.0.0.1:1234",
+    ]
+
+
+def test_prune_build_cache_sums_freed_lines(fake_runner: FakeRunner, rancher: None) -> None:
+    fake_runner.stub(
+        [*BUILDCTL, "prune"],
+        stdout='{"id": "a", "size": 1000}\nnoise\n{"id": "c", "size": 250}\n',
+    )
+    assert K3sService(runner=fake_runner).prune_build_cache() == 1250
+    assert fake_runner.calls[-1] == [*BUILDCTL, "prune", "--all", "--format", "json"]
+
+
+def test_prune_build_cache_dry_run_frees_nothing(rancher: None) -> None:
+    fake = FakeRunner(dry_run=True)
+    assert K3sService(runner=fake).prune_build_cache() == 0
+
+
+def test_prune_build_cache_failure_raises(fake_runner: FakeRunner, rancher: None) -> None:
+    fake_runner.stub([*BUILDCTL, "prune"], returncode=1, stderr="boom")
+    with pytest.raises(K3sQueryError, match="boom"):
+        K3sService(runner=fake_runner).prune_build_cache()

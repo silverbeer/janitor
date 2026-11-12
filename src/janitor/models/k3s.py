@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-__all__ = ["K3sImage", "K3sNode", "K3sPod", "K3sStatus"]
+__all__ = ["BuildCache", "K3sImage", "K3sNode", "K3sPod", "K3sStatus"]
 
 
 class K3sNode(BaseModel):
@@ -94,6 +94,21 @@ class K3sImage(BaseModel):
         if self.in_use:
             return False
         return self.dangling or (stale and self.stale)
+
+
+class BuildCache(BaseModel):
+    """BuildKit's build cache on the node (``buildctl du``).
+
+    Local image builds (``nerdctl build``) leave their layers here, in the
+    ``buildkit`` containerd namespace — invisible to the CRI, so image pruning
+    never touches it. On 2026-11-11 it had grown to 54 GB (SB-1631).
+    """
+
+    records: int = 0
+    total: int = 0
+    """Bytes held by every cache record."""
+    reclaimable: int = 0
+    """Bytes in records no running build is using — what ``prune`` frees."""
 
 
 def repository_of(ref: str) -> str:

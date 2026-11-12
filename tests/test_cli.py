@@ -183,3 +183,52 @@ def test_logs_size_empty(
     monkeypatch.setenv("JANITOR_LOGS__PATHS", f'["{tmp_path}"]')
     result = runner.invoke(app, ["logs", "size"])
     assert result.exit_code == 0
+
+
+# --- k3s build cache row (SB-1631) ---------------------------------------------
+
+
+def _doctor_with_build_cache(
+    fake: FakeRunner, monkeypatch: pytest.MonkeyPatch, **stub: object
+) -> str:
+    monkeypatch.setattr("janitor.services.k3s.which", lambda name: f"/bin/{name}")
+    fake.stub(["rdctl", "shell", "--", "sudo", "buildctl"], **stub)  # type: ignore[arg-type]
+    return _doctor_with_disk(monkeypatch, 10)
+
+
+def test_doctor_warns_on_big_build_cache(
+    patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = _doctor_with_build_cache(
+        patched_runner,
+        monkeypatch,
+        stdout=json.dumps([{"size": 54 * 1024**3, "inUse": False}]),
+    )
+    assert "k3s build cache" in out
+    assert "need attention" in out
+
+
+def test_doctor_small_build_cache_is_ok(
+    patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = _doctor_with_build_cache(
+        patched_runner, monkeypatch, stdout=json.dumps([{"size": 1024, "inUse": False}])
+    )
+    assert "k3s build cache" in out
+    assert "All systems healthy" in out
+
+
+def test_doctor_unreachable_buildkit_is_unknown_not_a_warning(
+    patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = _doctor_with_build_cache(patched_runner, monkeypatch, returncode=1)
+    assert "unreachable" in out
+    assert "All systems healthy" in out
+
+
+def test_doctor_no_build_cache_row_without_vm(
+    patched_runner: FakeRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("janitor.services.k3s.which", lambda _: None)
+    out = _doctor_with_disk(monkeypatch, 10)
+    assert "k3s build cache" not in out
