@@ -70,33 +70,71 @@ def images(
         f"({format_bytes(sum(i.size for i in more))})."
     )
     console.print("[muted]* compressed size; unpacked layers are freed too.[/muted]")
+    cache = _service(state).build_cache()
+    if cache is not None:
+        console.print(
+            f"BuildKit build cache: {format_bytes(cache.total)} in {cache.records} record(s), "
+            f"{format_bytes(cache.reclaimable)} reclaimable by `prune`."
+        )
 
 
 @app.command()
 def prune(
     ctx: typer.Context,
     stale: bool = typer.Option(False, "--stale", help=STALE_HELP),
+    build_cache: bool = typer.Option(
+        True,
+        "--build-cache/--no-build-cache",
+        help="Also drop the node's unused BuildKit build cache (local `nerdctl build` layers).",
+    ),
 ) -> None:
-    """Remove unused dangling images (and, with --stale, superseded ones)."""
+    """Remove unused dangling images (and, with --stale, superseded ones) and build cache."""
     state: AppState = ctx.obj
     service = _service(state)
     targets = [i for i in _load_images(service) if i.prunable(stale=stale)]
-    if not targets:
+    cache = service.build_cache() if build_cache else None
+    cache_bytes = cache.reclaimable if cache else 0
+    if not targets and not cache_bytes:
         console.print("[ok]Nothing to prune.[/]")
         return
-    total = format_bytes(sum(i.size for i in targets))
-    console.print(f"About to remove {len(targets)} image(s) (at least {total}):")
-    for image in targets:
-        console.print(f"  [muted]{image.reference} ({format_bytes(image.size)})[/muted]")
+    if targets:
+        total = format_bytes(sum(i.size for i in targets))
+        console.print(f"About to remove {len(targets)} image(s) (at least {total}):")
+        for image in targets:
+            console.print(f"  [muted]{image.reference} ({format_bytes(image.size)})[/muted]")
+    if cache and cache_bytes:
+        console.print(
+            f"About to drop BuildKit build cache: {format_bytes(cache_bytes)} "
+            f"({cache.records} record(s)); next local build is slower."
+        )
+    what = " and ".join(
+        part
+        for part in (
+            f"{len(targets)} image(s)" if targets else "",
+            "the build cache" if cache_bytes else "",
+        )
+        if part
+    )
     if state.dry_run:
         console.print("[warn]Dry-run: no changes will be made.[/]")
-    elif not confirm(f"Remove {len(targets)} image(s)?", assume_yes=state.assume_yes):
+    elif not confirm(f"Remove {what}?", assume_yes=state.assume_yes):
         console.print("[muted]Aborted.[/muted]")
         raise typer.Exit(code=0)
-    removed = service.remove_images(targets)
     verb = "Would remove" if state.dry_run else "Removed"
-    console.print(f"[ok]{verb} {len(removed)} of {len(targets)} image(s).[/]")
-    if service.is_rancher and removed and not state.dry_run:
+    removed: list[K3sImage] = []
+    if targets:
+        removed = service.remove_images(targets)
+        console.print(f"[ok]{verb} {len(removed)} of {len(targets)} image(s).[/]")
+    freed = 0
+    if cache_bytes:
+        try:
+            freed = service.prune_build_cache()
+        except K3sQueryError as exc:
+            err_console.print(f"[err]{exc}[/]")
+            raise typer.Exit(code=1) from exc
+        shown = cache_bytes if state.dry_run else freed
+        console.print(f"[ok]{verb} {format_bytes(shown)} of build cache.[/]")
+    if service.is_rancher and (removed or freed) and not state.dry_run:
         console.print("[info]Run `jt k3s trim` to give the space back to the host.[/]")
 
 

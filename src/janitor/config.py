@@ -98,6 +98,18 @@ class K3sConfig(BaseModel):
             "Desktop's data disk, which also backs /var/lib), else ['/']."
         ),
     )
+    buildkit_addr: str | None = Field(
+        default=None,
+        description=(
+            "buildkitd socket on the node, for build-cache size and prune. Default: "
+            "'unix:///run/buildkit/buildkitd.sock' with Rancher Desktop, else none "
+            "(build cache is skipped)."
+        ),
+    )
+    build_cache_warn_gb: float = Field(
+        default=20.0,
+        description="`jt doctor` warns when the node's BuildKit cache exceeds this many GB.",
+    )
 
 
 class DiskConfig(BaseModel):

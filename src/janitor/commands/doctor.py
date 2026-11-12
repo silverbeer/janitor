@@ -10,6 +10,7 @@ from janitor.context import AppState
 from janitor.models.common import HealthStatus
 from janitor.services.disk import DiskService
 from janitor.services.git import last_run_age_days, load_result
+from janitor.services.k3s import K3sService
 from janitor.services.system import SystemService
 from janitor.utils.console import console
 from janitor.utils.format import format_bytes
@@ -88,6 +89,30 @@ def doctor(ctx: typer.Context) -> None:
         f"[{git_health.style}]{git_health.icon} {git_health.value}[/]",
         git_detail,
     )
+
+    # k3s build cache (SB-1631): BuildKit layers from local builds live outside
+    # the CRI, so image pruning never sees them; 54 GB filled the disk unseen.
+    k3s = K3sService(runner=state.runner, config=state.config.k3s)
+    if k3s.buildkit_addr is not None:
+        cache = k3s.build_cache()
+        limit = int(state.config.k3s.build_cache_warn_gb * 1024**3)
+        if cache is None:
+            cache_health = HealthStatus.UNKNOWN
+            cache_detail = "buildkitd unreachable (VM stopped?)"
+        else:
+            cache_health = HealthStatus.WARN if cache.reclaimable > limit else HealthStatus.OK
+            cache_detail = f"{format_bytes(cache.reclaimable)} reclaimable" + (
+                " — `jt --yes k3s prune && jt --yes k3s trim`"
+                if cache_health is HealthStatus.WARN
+                else ""
+            )
+        if cache_health is HealthStatus.WARN and worst is HealthStatus.OK:
+            worst = HealthStatus.WARN
+        table.add_row(
+            "k3s build cache",
+            f"[{cache_health.style}]{cache_health.icon} {cache_health.value}[/]",
+            cache_detail,
+        )
 
     console.print(table)
     summary = {
