@@ -110,6 +110,24 @@ class K3sConfig(BaseModel):
         default=20.0,
         description="`jt doctor` warns when the node's BuildKit cache exceeds this many GB.",
     )
+    state_file: ExpandedPath = Field(
+        default_factory=lambda: Path.home() / ".janitor" / "state" / "k3s-maintain.json",
+        description="Last real `jt k3s maintain` run, read by `jt doctor`.",
+    )
+    log_file: ExpandedPath = Field(
+        default_factory=lambda: Path.home() / "Library" / "Logs" / "janitor" / "k3s-maintain.log",
+        description="Where the scheduled run writes its output.",
+    )
+    schedule_weekday: int = Field(
+        default=0, ge=0, le=6, description="Weekly run day (launchd: 0 = Sunday)."
+    )
+    schedule_hour: int = Field(default=4, ge=0, le=23, description="Weekly run hour (local).")
+    schedule_minute: int = Field(default=0, ge=0, le=59, description="Weekly run minute.")
+    stale_after_days: int = Field(
+        default=10,
+        ge=1,
+        description="`jt doctor` warns when the last real maintain run is older than this.",
+    )
 
 
 class DiskConfig(BaseModel):

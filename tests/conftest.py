@@ -95,3 +95,5 @@ def _isolated_git_state(
     """Never let a test read or write the machine's real `jt git` state file."""
     state = tmp_path_factory.mktemp("git-state") / "git-prune.json"
     monkeypatch.setenv("JANITOR_GIT__STATE_FILE", str(state))
+    k3s_state = tmp_path_factory.mktemp("k3s-state") / "k3s-maintain.json"
+    monkeypatch.setenv("JANITOR_K3S__STATE_FILE", str(k3s_state))

@@ -165,6 +165,9 @@ jt k3s prune                    # remove unused dangling images + BuildKit build
 jt k3s prune --no-build-cache   # images only
 jt k3s prune --stale            # + superseded tags of a repo that has one in use
 jt k3s trim                     # fstrim the VM so freed space returns to the host
+jt k3s maintain                 # unattended: dangling images + build cache, then trim
+jt k3s schedule install         # run `jt --yes k3s maintain` weekly, Sunday 04:00 (launchd)
+jt k3s schedule status          # loaded? what did the last run do?
 
 jt git audit                    # every repo under ~/gitrepos: what's prunable, what needs a human
 jt git audit --repo .           # just the repo you're in (works inside a worktree)
@@ -200,6 +203,12 @@ diagram and when to run it: [docs/git-hygiene.md](./docs/git-hygiene.md).
   54 GB and filled the Mac. `jt k3s prune` now drops it (`buildctl prune --all`;
   the cost is a slower next build), `jt k3s images` reports it, and `jt doctor`
   warns above `k3s.build_cache_warn_gb` (default 20).
+- **Weekly is the cadence.** `jt k3s schedule install` runs `jt k3s maintain`
+  every Sunday at 04:00: dangling images and build cache go (never `--stale`
+  tags — that stays a human call), then the VM is trimmed. Weekly keeps the cache
+  to about one week of builds while builds within the week stay fast. `jt doctor`
+  shows the last run as **k3s upkeep** and warns if it failed or is over 10 days
+  old. Day/time: `k3s.schedule_weekday|hour|minute` (0 = Sunday).
 
 > `jt secrets run` wraps [varlock](https://varlock.dev/) (`npm install -g varlock`)
 > to resolve secrets from 1Password locally. The cloud path is untouched — varlock

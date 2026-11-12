@@ -29,13 +29,27 @@ _PATH = ":".join(
 )
 
 
-def build_plist(*, label: str, program: list[str], hour: int, minute: int, log_file: Path) -> bytes:
-    """The LaunchAgent plist for a daily job at ``hour:minute`` local time."""
+def build_plist(
+    *,
+    label: str,
+    program: list[str],
+    hour: int,
+    minute: int,
+    log_file: Path,
+    weekday: int | None = None,
+) -> bytes:
+    """The LaunchAgent plist for a job at ``hour:minute`` local time.
+
+    Daily by default; ``weekday`` (launchd numbering, 0 = Sunday) makes it weekly.
+    """
+    interval = {"Hour": hour, "Minute": minute}
+    if weekday is not None:
+        interval["Weekday"] = weekday
     return plistlib.dumps(
         {
             "Label": label,
             "ProgramArguments": program,
-            "StartCalendarInterval": {"Hour": hour, "Minute": minute},
+            "StartCalendarInterval": interval,
             "EnvironmentVariables": {"PATH": _PATH, "HOME": str(Path.home())},
             "StandardOutPath": str(log_file),
             "StandardErrorPath": str(log_file),
